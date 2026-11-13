@@ -1,0 +1,388 @@
+-- Skrip Auto Farm Ultimate v32 (Optimized Floating Icon) by ZyrexScript
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService") 
+local TweenService = game:GetService("TweenService")
+
+if CoreGui:FindFirstChild("ZyrexHub") then
+    CoreGui.ZyrexHub:Destroy()
+end
+
+local runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
+local savedPadCFrame = nil 
+local cframeLockConnection = nil 
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "ZyrexHub"
+ScreenGui.Parent = gethui and gethui() or CoreGui
+
+local StealIndicator = Instance.new("TextLabel")
+StealIndicator.Size = UDim2.new(0, 180, 0, 35)
+StealIndicator.Position = UDim2.new(0.5, -90, 0.85, 0)
+StealIndicator.BackgroundColor3 = Color3.fromRGB(20, 10, 15)
+StealIndicator.BackgroundTransparency = 0.2
+StealIndicator.TextColor3 = Color3.fromRGB(255, 50, 100)
+StealIndicator.TextSize = 14
+StealIndicator.Font = Enum.Font.GothamBold
+StealIndicator.Text = "STEALING ACTIVE"
+StealIndicator.Visible = false
+StealIndicator.Parent = ScreenGui
+Instance.new("UICorner", StealIndicator).CornerRadius = UDim.new(1, 0) 
+
+-- === FLOATING LOGO (DIUBAH MENJADI ROUNDED SQUARE IKON) ===
+local FloatingBtn = Instance.new("ImageButton")
+FloatingBtn.Name = "FloatingLogo"
+FloatingBtn.Size = UDim2.new(0, 50, 0, 50) -- Diperbesar agar detail Z terlihat jelas
+FloatingBtn.Position = UDim2.new(0.5, -30, 0, 20) 
+FloatingBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20) -- Senada dengan warna Hub
+
+-- Asset ID Logo Z Kamu
+FloatingBtn.Image = "rbxassetid://113865305400607" 
+FloatingBtn.ScaleType = Enum.ScaleType.Fit 
+
+FloatingBtn.BorderSizePixel = 0
+FloatingBtn.Active = true
+FloatingBtn.Draggable = true 
+FloatingBtn.Visible = false 
+FloatingBtn.Parent = ScreenGui
+
+-- Diubah ke Rounded Square (Kotak Melengkung) agar pas dengan latar gambar logo
+Instance.new("UICorner", FloatingBtn).CornerRadius = UDim.new(0, 12)
+
+-- Garis pinggir neon merah/pink senada dengan tema Foxname
+local FloatStroke = Instance.new("UIStroke")
+FloatStroke.Color = Color3.fromRGB(255, 50, 100) 
+FloatStroke.Thickness = 2
+FloatStroke.Parent = FloatingBtn
+
+-- === FRAME UTAMA ===
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 520, 0, 320)
+MainFrame.Position = UDim2.new(0.5, -260, 0.5, -160)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 12, 16) 
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+-- === BACKGROUND IMAGE ===
+local BgImage = Instance.new("ImageLabel")
+BgImage.Size = UDim2.new(1, 0, 1, 0)
+BgImage.BackgroundTransparency = 1
+
+-- Background Asset ID Kamu
+BgImage.Image = "rbxassetid://84587193599064" 
+BgImage.ScaleType = Enum.ScaleType.Crop
+BgImage.ImageTransparency = 0.65 
+BgImage.ImageColor3 = Color3.fromRGB(255, 255, 255) 
+BgImage.Parent = MainFrame
+Instance.new("UICorner", BgImage).CornerRadius = UDim.new(0, 12)
+
+-- Header / Topbar
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 40)
+TopBar.BackgroundTransparency = 1
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(0, 200, 1, 0)
+Title.Position = UDim2.new(0, 15, 0, 0)
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 16
+Title.Font = Enum.Font.GothamBold
+Title.Text = "ZyrexHub v32"
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TopBar
+
+local SubTitle = Instance.new("TextLabel")
+SubTitle.Size = UDim2.new(0, 200, 0, 15)
+SubTitle.Position = UDim2.new(0, 15, 0, 22)
+SubTitle.BackgroundTransparency = 1
+SubTitle.TextColor3 = Color3.fromRGB(150, 150, 150)
+SubTitle.TextSize = 11
+SubTitle.Font = Enum.Font.Gotham
+SubTitle.Text = "discord.gg/zyrex"
+SubTitle.TextXAlignment = Enum.TextXAlignment.Left
+SubTitle.Parent = TopBar
+
+-- Tombol Close & Minimize
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 24, 0, 24)
+CloseBtn.Position = UDim2.new(1, -34, 0, 10)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20)
+CloseBtn.TextColor3 = Color3.fromRGB(255, 100, 120)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Text = "X"
+CloseBtn.TextSize = 12
+CloseBtn.Parent = TopBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(1, 0)
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 24, 0, 24)
+MinimizeBtn.Position = UDim2.new(1, -64, 0, 10)
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20)
+MinimizeBtn.TextColor3 = Color3.fromRGB(255, 100, 120)
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.Text = "-"
+MinimizeBtn.TextSize = 18
+MinimizeBtn.Parent = TopBar
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(1, 0)
+
+MinimizeBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+    FloatingBtn.Visible = true
+end)
+
+FloatingBtn.MouseButton1Click:Connect(function()
+    FloatingBtn.Visible = false
+    MainFrame.Visible = true
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
+    if cframeLockConnection then cframeLockConnection:Disconnect() end
+    ScreenGui:Destroy()
+end)
+
+-- Sidebar (Kiri)
+local SideBar = Instance.new("Frame")
+SideBar.Size = UDim2.new(0, 140, 1, -50)
+SideBar.Position = UDim2.new(0, 10, 0, 45)
+SideBar.BackgroundColor3 = Color3.fromRGB(25, 15, 20)
+SideBar.BackgroundTransparency = 0.5
+SideBar.Parent = MainFrame
+Instance.new("UICorner", SideBar).CornerRadius = UDim.new(0, 8)
+
+local TabBtn = Instance.new("TextButton")
+TabBtn.Size = UDim2.new(0.9, 0, 0, 35)
+TabBtn.Position = UDim2.new(0.05, 0, 0, 10)
+TabBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 100) 
+TabBtn.BackgroundTransparency = 0.2
+TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+TabBtn.Font = Enum.Font.GothamSemibold
+TabBtn.TextSize = 13
+TabBtn.Text = "  [F] Farm"
+TabBtn.TextXAlignment = Enum.TextXAlignment.Left
+TabBtn.Parent = SideBar
+Instance.new("UICorner", TabBtn).CornerRadius = UDim.new(0, 6)
+
+-- Area Konten
+local Content = Instance.new("ScrollingFrame")
+Content.Size = UDim2.new(1, -170, 1, -50)
+Content.Position = UDim2.new(0, 160, 0, 45)
+Content.BackgroundTransparency = 1
+Content.BorderSizePixel = 0
+Content.ScrollBarThickness = 2
+Content.ScrollBarImageColor3 = Color3.fromRGB(255, 50, 100)
+Content.Parent = MainFrame
+
+local Layout = Instance.new("UIListLayout")
+Layout.Parent = Content
+Layout.SortOrder = Enum.SortOrder.LayoutOrder
+Layout.Padding = UDim.new(0, 10)
+
+-- FUNGSI PEMBUAT UI
+local function CreateSection(titleText)
+    local sec = Instance.new("TextLabel")
+    sec.Size = UDim2.new(1, -10, 0, 20)
+    sec.BackgroundTransparency = 1
+    sec.TextColor3 = Color3.fromRGB(200, 200, 200)
+    sec.TextSize = 12
+    sec.Font = Enum.Font.GothamBold
+    sec.Text = "  " .. titleText
+    sec.TextXAlignment = Enum.TextXAlignment.Left
+    sec.Parent = Content
+end
+
+local function CreateToggle(titleText, callback)
+    local tFrame = Instance.new("Frame")
+    tFrame.Size = UDim2.new(1, -15, 0, 38)
+    tFrame.BackgroundColor3 = Color3.fromRGB(30, 20, 25)
+    tFrame.BackgroundTransparency = 0.4
+    tFrame.Parent = Content
+    Instance.new("UICorner", tFrame).CornerRadius = UDim.new(0, 8)
+    
+    local tLabel = Instance.new("TextLabel")
+    tLabel.Size = UDim2.new(0.7, 0, 1, 0)
+    tLabel.Position = UDim2.new(0, 15, 0, 0)
+    tLabel.BackgroundTransparency = 1
+    tLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+    tLabel.TextSize = 13
+    tLabel.Font = Enum.Font.GothamSemibold
+    tLabel.Text = titleText
+    tLabel.TextXAlignment = Enum.TextXAlignment.Left
+    tLabel.Parent = tFrame
+    
+    local SwitchBase = Instance.new("TextButton")
+    SwitchBase.Size = UDim2.new(0, 42, 0, 22)
+    SwitchBase.Position = UDim2.new(1, -55, 0.5, -11)
+    SwitchBase.BackgroundColor3 = Color3.fromRGB(50, 40, 45) 
+    SwitchBase.Text = ""
+    SwitchBase.Parent = tFrame
+    Instance.new("UICorner", SwitchBase).CornerRadius = UDim.new(1, 0) 
+    
+    local SwitchCircle = Instance.new("Frame")
+    SwitchCircle.Size = UDim2.new(0, 18, 0, 18)
+    SwitchCircle.Position = UDim2.new(0, 2, 0.5, -9) 
+    SwitchCircle.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+    SwitchCircle.Parent = SwitchBase
+    Instance.new("UICorner", SwitchCircle).CornerRadius = UDim.new(1, 0)
+
+    local state = false
+    SwitchBase.MouseButton1Click:Connect(function()
+        state = not state
+        local targetColor = state and Color3.fromRGB(255, 50, 100) or Color3.fromRGB(50, 40, 45)
+        local targetPos = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+        local circleColor = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        
+        TweenService:Create(SwitchBase, TweenInfo.new(0.2), {BackgroundColor3 = targetColor}):Play()
+        TweenService:Create(SwitchCircle, TweenInfo.new(0.2), {Position = targetPos, BackgroundColor3 = circleColor}):Play()
+        callback(state)
+    end)
+end
+
+-- === MENGISI KONTEN UI ===
+CreateSection("Main Farm")
+CreateToggle("Auto Tap x2", function(state) runningTap = state end)
+CreateToggle("Auto Steal Pet", function(state)
+    runningSteal = state
+    if runningSteal then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            savedPadCFrame = char.HumanoidRootPart.CFrame
+        end
+        StealIndicator.Visible = true 
+        if not cframeLockConnection then
+            cframeLockConnection = RunService.Heartbeat:Connect(function()
+                if runningSteal and savedPadCFrame then
+                    local currentChar = LocalPlayer.Character
+                    if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+                        currentChar.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        currentChar.HumanoidRootPart.CFrame = savedPadCFrame
+                    end
+                end
+            end)
+        end
+    else
+        StealIndicator.Visible = false 
+        if cframeLockConnection then
+            cframeLockConnection:Disconnect()
+            cframeLockConnection = nil
+        end
+    end
+end)
+
+CreateSection("Automation & Upgrades")
+CreateToggle("Auto Equip Best (15s)", function(state) runningEquip = state end)
+CreateToggle("Auto Buy Best Food", function(state) runningFood = state end)
+CreateToggle("Auto Upgrade Stand", function(state) runningUpgrade = state end)
+
+Content.CanvasSize = UDim2.new(0, 0, 0, Layout.AbsoluteContentSize.Y + 20)
+
+-- === LOOP LOGIC SKRIP ===
+
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if runningTap then
+            pcall(function()
+                for _, gui in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
+                    if (gui:IsA("ImageButton") or gui:IsA("TextButton")) and gui.Visible then
+                        local isTarget = false
+                        local name = gui.Name:lower()
+                        if name:find("tapbonus") or name:find("training_tap") or name:find("x2") or name:find("2x") then
+                            if gui.AbsoluteSize.X > 20 and gui.AbsoluteSize.X < 150 and gui.AbsoluteSize.Y > 20 and gui.AbsoluteSize.Y < 150 then
+                                isTarget = true
+                            end
+                        end
+                        if isTarget then
+                            pcall(function()
+                                if firesignal then
+                                    firesignal(gui.Activated)
+                                    firesignal(gui.MouseButton1Click)
+                                end
+                            end)
+                            break
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    if not Remotes then return end
+    local ThrowStart = Remotes:WaitForChild("Throw_Start", 5)
+    local ThrowMeter = Remotes:WaitForChild("Throw_MeterStarted", 5)
+    local ThrowResolve = Remotes:WaitForChild("Throw_Resolve", 5)
+    local ThrowComplete = Remotes:WaitForChild("Throw_Complete", 5)
+    while true do
+        task.wait(0.4) 
+        if runningSteal and savedPadCFrame then
+            task.spawn(function()
+                pcall(function()
+                    ThrowStart:InvokeServer()
+                    task.wait(0.05) 
+                    ThrowMeter:FireServer()
+                    task.wait(0.05)
+                    ThrowResolve:InvokeServer(1) 
+                    task.wait(0.05)
+                    ThrowComplete:InvokeServer() 
+                end)
+            end)
+        end
+    end
+end)
+
+task.spawn(function()
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    if not Remotes then return end
+    local PlotEquipBest = Remotes:WaitForChild("Plot_EquipBest", 5)
+    while true do
+        if runningEquip and PlotEquipBest then
+            pcall(function() PlotEquipBest:InvokeServer() end)
+            task.wait(15) 
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+task.spawn(function()
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    if not Remotes then return end
+    local ShopBuy = Remotes:WaitForChild("Shop_Buy", 5)
+    while true do
+        if runningFood and ShopBuy then
+            for i = 60, 1, -1 do
+                if not runningFood then break end
+                task.spawn(function() pcall(function() ShopBuy:InvokeServer(i) end) end)
+                task.wait(0.05)
+            end
+            task.wait(5)
+        else
+            task.wait(1)
+        end
+    end
+end)
+
+task.spawn(function()
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    if not Remotes then return end
+    local StandUpgrade = Remotes:WaitForChild("Stand_Upgrade", 5)
+    while true do
+        if runningUpgrade and StandUpgrade then
+            pcall(function() StandUpgrade:InvokeServer() end)
+            task.wait(3) 
+        else
+            task.wait(1)
+        end
+    end
+end)
