@@ -1,4 +1,4 @@
--- Skrip Auto Farm Ultimate v32 (Optimized Floating Icon) by ZyrexScript
+-- Skrip Auto Farm Ultimate v34 (Single Verified Catch Notif Edition) by ZyrexScript
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -13,45 +13,271 @@ end
 local runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
 local savedPadCFrame = nil 
 local cframeLockConnection = nil 
+local charAddedConnection = nil
+local guiAddedConnection = nil
+
+local totalStealCount = 0
+local catchNotifiedThisCycle = false
+local lastCatchTick = 0
+local lastPlotFullTick = 0
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "ZyrexHub"
+ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = gethui and gethui() or CoreGui
 
+-- === FORMATTER ANGKA (CPS / UANG) ===
+local function FormatShortNumber(num)
+    if type(num) ~= "number" then return tostring(num) end
+    local suffixes = {"", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"}
+    local idx = 1
+    while math.abs(num) >= 1000 and idx < #suffixes do
+        num = num / 1000
+        idx = idx + 1
+    end
+    if idx == 1 then
+        return tostring(math.floor(num))
+    end
+    return string.format("%.2f%s", num, suffixes[idx]):gsub("%.00", "")
+end
+
+-- === SISTEM NOTIFIKASI HASIL STEAL (KANAN LAYAR) ===
+local NotifyContainer = Instance.new("Frame")
+NotifyContainer.Name = "ZyrexNotifications"
+NotifyContainer.Size = UDim2.new(0, 270, 0.7, 0)
+NotifyContainer.Position = UDim2.new(1, -285, 0.15, 0)
+NotifyContainer.BackgroundTransparency = 1
+NotifyContainer.Parent = ScreenGui
+
+local NotifyLayout = Instance.new("UIListLayout")
+NotifyLayout.Parent = NotifyContainer
+NotifyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+NotifyLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+NotifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+NotifyLayout.Padding = UDim.new(0, 8)
+
+local function ShowResultNotif(titleText, detailText, accentColor)
+    local color = accentColor or Color3.fromRGB(255, 50, 100)
+
+    local Wrapper = Instance.new("Frame")
+    Wrapper.Size = UDim2.new(1, 0, 0, 56)
+    Wrapper.BackgroundTransparency = 1
+    Wrapper.Parent = NotifyContainer
+
+    local Card = Instance.new("Frame")
+    Card.Size = UDim2.new(1, 0, 1, 0)
+    Card.Position = UDim2.new(1, 30, 0, 0)
+    Card.BackgroundColor3 = Color3.fromRGB(20, 14, 18)
+    Card.BackgroundTransparency = 0.12
+    Card.BorderSizePixel = 0
+    Card.Parent = Wrapper
+    Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 8)
+
+    local CardStroke = Instance.new("UIStroke")
+    CardStroke.Color = color
+    CardStroke.Thickness = 1.5
+    CardStroke.Transparency = 0.3
+    CardStroke.Parent = Card
+
+    local AccentBar = Instance.new("Frame")
+    AccentBar.Size = UDim2.new(0, 4, 0.7, 0)
+    AccentBar.Position = UDim2.new(0, 8, 0.15, 0)
+    AccentBar.BackgroundColor3 = color
+    AccentBar.BorderSizePixel = 0
+    AccentBar.Parent = Card
+    Instance.new("UICorner", AccentBar).CornerRadius = UDim.new(1, 0)
+
+    local TitleLbl = Instance.new("TextLabel")
+    TitleLbl.Size = UDim2.new(1, -38, 0, 22)
+    TitleLbl.Position = UDim2.new(0, 20, 0, 6)
+    TitleLbl.BackgroundTransparency = 1
+    TitleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TitleLbl.TextSize = 13
+    TitleLbl.Font = Enum.Font.GothamBold
+    TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    TitleLbl.Text = titleText
+    TitleLbl.Parent = Card
+
+    local DetailLbl = Instance.new("TextLabel")
+    DetailLbl.Size = UDim2.new(1, -28, 0, 20)
+    DetailLbl.Position = UDim2.new(0, 20, 0, 28)
+    DetailLbl.BackgroundTransparency = 1
+    DetailLbl.TextColor3 = Color3.fromRGB(190, 190, 195)
+    DetailLbl.TextSize = 11
+    DetailLbl.Font = Enum.Font.Gotham
+    DetailLbl.TextXAlignment = Enum.TextXAlignment.Left
+    DetailLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    DetailLbl.Text = detailText
+    DetailLbl.Parent = Card
+
+    local CloseNotif = Instance.new("TextButton")
+    CloseNotif.Size = UDim2.new(0, 18, 0, 18)
+    CloseNotif.Position = UDim2.new(1, -22, 0, 5)
+    CloseNotif.BackgroundTransparency = 1
+    CloseNotif.TextColor3 = Color3.fromRGB(160, 160, 160)
+    CloseNotif.Font = Enum.Font.GothamBold
+    CloseNotif.TextSize = 11
+    CloseNotif.Text = "X"
+    CloseNotif.Parent = Card
+
+    local dismissed = false
+    local function Dismiss()
+        if dismissed then return end
+        dismissed = true
+        local outTween = TweenService:Create(Card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            Position = UDim2.new(1, 30, 0, 0),
+            BackgroundTransparency = 1
+        })
+        outTween:Play()
+        outTween.Completed:Connect(function()
+            if Wrapper then Wrapper:Destroy() end
+        end)
+    end
+
+    CloseNotif.MouseButton1Click:Connect(Dismiss)
+
+    TweenService:Create(Card, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Position = UDim2.new(0, 0, 0, 0)
+    }):Play()
+
+    task.delay(3.5, Dismiss)
+end
+
+-- === INDIKATOR STATUS BAWAH ===
 local StealIndicator = Instance.new("TextLabel")
-StealIndicator.Size = UDim2.new(0, 180, 0, 35)
-StealIndicator.Position = UDim2.new(0.5, -90, 0.85, 0)
+StealIndicator.Size = UDim2.new(0, 210, 0, 34)
+StealIndicator.Position = UDim2.new(0.5, -105, 0.86, 0)
 StealIndicator.BackgroundColor3 = Color3.fromRGB(20, 10, 15)
 StealIndicator.BackgroundTransparency = 0.2
 StealIndicator.TextColor3 = Color3.fromRGB(255, 50, 100)
-StealIndicator.TextSize = 14
+StealIndicator.TextSize = 13
 StealIndicator.Font = Enum.Font.GothamBold
-StealIndicator.Text = "STEALING ACTIVE"
+StealIndicator.Text = "STEALING ACTIVE (0)"
 StealIndicator.Visible = false
 StealIndicator.Parent = ScreenGui
 Instance.new("UICorner", StealIndicator).CornerRadius = UDim.new(1, 0) 
 
--- === FLOATING LOGO (DIUBAH MENJADI ROUNDED SQUARE IKON) ===
+-- === FUNGSI TRIGGER 1X NOTIFIKASI SAAT TANGKAPAN SUKSES ===
+local function RegisterVerifiedCatch(titleText, detailText)
+    if catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.7 then
+        return
+    end
+    catchNotifiedThisCycle = true
+    lastCatchTick = tick()
+    totalStealCount += 1
+    StealIndicator.Text = "STEALING ACTIVE (" .. totalStealCount .. ")"
+    ShowResultNotif(titleText, detailText, Color3.fromRGB(80, 220, 120))
+end
+
+-- === PARSER DATA HASIL THROW DARI SERVER ===
+local function ParseThrowResult(res1, res2)
+    local data = (type(res2) == "table" and res2) or (type(res1) == "table" and res1) or nil
+    if data then
+        local petInfo = data.Animal or data.Pet or data.Reward or data.Data or data
+        if type(petInfo) == "table" then
+            local petName = petInfo.Name or petInfo.AnimalName or petInfo.PetName or petInfo.Id or petInfo.ID
+            if petName then
+                local mutation = tostring(petInfo.Mutation or petInfo.Variant or "None")
+                local rawWeight = petInfo.Weight or petInfo.Mass or petInfo.Size
+                local weightStr = rawWeight and (tostring(rawWeight) .. ((tostring(rawWeight):find("kg") or tostring(rawWeight):find("t")) and "" or " kg")) or "-"
+                local rawCps = petInfo.CPS or petInfo.CashPerSecond or petInfo.Income or petInfo.Rate
+                local cpsStr = rawCps and ("$" .. FormatShortNumber(rawCps) .. "/s") or "-"
+                return tostring(petName) .. " Obtained!", string.format("Mutation: %s | Weight: %s | CPS: %s", mutation, weightStr, cpsStr)
+            end
+        end
+    elseif type(res2) == "string" and #res2 > 1 then
+        return res2 .. " Obtained!", "Berhasil ditangkap oleh Auto Steal"
+    elseif type(res1) == "string" and #res1 > 1 then
+        return res1 .. " Obtained!", "Berhasil ditangkap oleh Auto Steal"
+    end
+    return nil, nil
+end
+
+-- === LISTENER NOTIFIKASI RESMI GAME ("Obtained!" & "Plot is full") ===
+guiAddedConnection = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc)
+    if not runningSteal then return end
+    if desc:IsA("TextLabel") then
+        task.defer(function()
+            task.wait(0.05)
+            if not desc or not desc.Parent then return end
+            local txt = desc.Text
+            if type(txt) ~= "string" or txt == "" then return end
+
+            if txt:find("Obtained!") then
+                local detail = "Pet baru berhasil masuk ke inventory!"
+                for _, sibling in ipairs(desc.Parent:GetChildren()) do
+                    if sibling:IsA("TextLabel") and sibling ~= desc and (sibling.Text:find("Mutation") or sibling.Text:find("CPS") or sibling.Text:find("Weight")) then
+                        detail = sibling.Text
+                        break
+                    end
+                end
+                RegisterVerifiedCatch(txt, detail)
+            elseif txt:lower():find("plot is full") then
+                if (tick() - lastPlotFullTick) > 5 then
+                    lastPlotFullTick = tick()
+                    ShowResultNotif("Plot Penuh!", txt, Color3.fromRGB(255, 80, 80))
+                end
+            end
+        end)
+    end
+end)
+
+-- === HELPER SNAPSHOT INVENTORY (BACKPACK & CHARACTER) ===
+local function SnapshotOwnedTools()
+    local items = {}
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            items[item] = true
+        end
+    end
+    local char = LocalPlayer.Character
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then
+                items[item] = true
+            end
+        end
+    end
+    return items
+end
+
+local function FindNewlyAddedTool(beforeSnapshot)
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if not beforeSnapshot[item] then
+                return item
+            end
+        end
+    end
+    local char = LocalPlayer.Character
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") and not beforeSnapshot[item] then
+                return item
+            end
+        end
+    end
+    return nil
+end
+
+-- === FLOATING LOGO ===
 local FloatingBtn = Instance.new("ImageButton")
 FloatingBtn.Name = "FloatingLogo"
-FloatingBtn.Size = UDim2.new(0, 50, 0, 50) -- Diperbesar agar detail Z terlihat jelas
+FloatingBtn.Size = UDim2.new(0, 50, 0, 50)
 FloatingBtn.Position = UDim2.new(0.5, -30, 0, 20) 
-FloatingBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20) -- Senada dengan warna Hub
-
--- Asset ID Logo Z Kamu
-FloatingBtn.Image = "rbxassetid://113865305400607" 
+FloatingBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20)
+FloatingBtn.Image = "rbxassetid://100417413707381" 
 FloatingBtn.ScaleType = Enum.ScaleType.Fit 
-
 FloatingBtn.BorderSizePixel = 0
 FloatingBtn.Active = true
 FloatingBtn.Draggable = true 
 FloatingBtn.Visible = false 
 FloatingBtn.Parent = ScreenGui
-
--- Diubah ke Rounded Square (Kotak Melengkung) agar pas dengan latar gambar logo
 Instance.new("UICorner", FloatingBtn).CornerRadius = UDim.new(0, 12)
 
--- Garis pinggir neon merah/pink senada dengan tema Foxname
 local FloatStroke = Instance.new("UIStroke")
 FloatStroke.Color = Color3.fromRGB(255, 50, 100) 
 FloatStroke.Thickness = 2
@@ -72,8 +298,6 @@ Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 local BgImage = Instance.new("ImageLabel")
 BgImage.Size = UDim2.new(1, 0, 1, 0)
 BgImage.BackgroundTransparency = 1
-
--- Background Asset ID Kamu
 BgImage.Image = "rbxassetid://84587193599064" 
 BgImage.ScaleType = Enum.ScaleType.Crop
 BgImage.ImageTransparency = 0.65 
@@ -95,7 +319,7 @@ Title.BackgroundTransparency = 1
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 16
 Title.Font = Enum.Font.GothamBold
-Title.Text = "ZyrexHub v32"
+Title.Text = "ZyrexHub v34"
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TopBar
 
@@ -146,6 +370,8 @@ end)
 CloseBtn.MouseButton1Click:Connect(function()
     runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
     if cframeLockConnection then cframeLockConnection:Disconnect() end
+    if charAddedConnection then charAddedConnection:Disconnect() end
+    if guiAddedConnection then guiAddedConnection:Disconnect() end
     ScreenGui:Destroy()
 end)
 
@@ -246,6 +472,37 @@ local function CreateToggle(titleText, callback)
     end)
 end
 
+-- === FUNGSI PENGUNCI POSISI (ANTI-BLINK) ===
+local function StartPositionLock()
+    if cframeLockConnection then
+        cframeLockConnection:Disconnect()
+        cframeLockConnection = nil
+    end
+    cframeLockConnection = RunService.Heartbeat:Connect(function()
+        if runningSteal and savedPadCFrame then
+            local currentChar = LocalPlayer.Character
+            local hrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+                if (hrp.Position - savedPadCFrame.Position).Magnitude > 0.15 then
+                    hrp.CFrame = savedPadCFrame
+                end
+            end
+        end
+    end)
+end
+
+charAddedConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
+    if runningSteal and savedPadCFrame then
+        local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            task.wait(0.1)
+            hrp.CFrame = savedPadCFrame
+        end
+    end
+end)
+
 -- === MENGISI KONTEN UI ===
 CreateSection("Main Farm")
 CreateToggle("Auto Tap x2", function(state) runningTap = state end)
@@ -253,21 +510,15 @@ CreateToggle("Auto Steal Pet", function(state)
     runningSteal = state
     if runningSteal then
         local char = LocalPlayer.Character
-        if char and char:FindFirstChild("HumanoidRootPart") then
-            savedPadCFrame = char.HumanoidRootPart.CFrame
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            savedPadCFrame = hrp.CFrame
         end
+        totalStealCount = 0
+        StealIndicator.Text = "STEALING ACTIVE (0)"
         StealIndicator.Visible = true 
-        if not cframeLockConnection then
-            cframeLockConnection = RunService.Heartbeat:Connect(function()
-                if runningSteal and savedPadCFrame then
-                    local currentChar = LocalPlayer.Character
-                    if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
-                        currentChar.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                        currentChar.HumanoidRootPart.CFrame = savedPadCFrame
-                    end
-                end
-            end)
-        end
+        StartPositionLock()
+        ShowResultNotif("Auto Steal Aktif", "Posisi pad dikunci & siap melempar.", Color3.fromRGB(255, 50, 100))
     else
         StealIndicator.Visible = false 
         if cframeLockConnection then
@@ -286,6 +537,7 @@ Content.CanvasSize = UDim2.new(0, 0, 0, Layout.AbsoluteContentSize.Y + 20)
 
 -- === LOOP LOGIC SKRIP ===
 
+-- Loop 1: Auto Tap x2
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -316,31 +568,103 @@ task.spawn(function()
     end
 end)
 
+-- Loop 2: Smart Sequential Auto Steal + Single Verified Notification
 task.spawn(function()
-    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not Remotes then return end
-    local ThrowStart = Remotes:WaitForChild("Throw_Start", 5)
-    local ThrowMeter = Remotes:WaitForChild("Throw_MeterStarted", 5)
-    local ThrowResolve = Remotes:WaitForChild("Throw_Resolve", 5)
-    local ThrowComplete = Remotes:WaitForChild("Throw_Complete", 5)
+    local ThrowStart = Remotes:WaitForChild("Throw_Start", 10)
+    local ThrowMeter = Remotes:WaitForChild("Throw_MeterStarted", 10)
+    local ThrowResolve = Remotes:WaitForChild("Throw_Resolve", 10)
+    local ThrowComplete = Remotes:WaitForChild("Throw_Complete", 10)
+
+    local lastCycleTick = tick()
+
     while true do
-        task.wait(0.4) 
-        if runningSteal and savedPadCFrame then
-            task.spawn(function()
-                pcall(function()
-                    ThrowStart:InvokeServer()
-                    task.wait(0.05) 
+        if runningSteal then
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+            if hrp then
+                if not savedPadCFrame then
+                    savedPadCFrame = hrp.CFrame
+                end
+
+                -- Watchdog pemulihan otomatis jika siklus macet > 3.5 detik
+                if (tick() - lastCycleTick) > 3.5 then
+                    pcall(function() ThrowComplete:InvokeServer() end)
+                    hrp.CFrame = savedPadCFrame
+                    lastCycleTick = tick()
+                    task.wait(0.2)
+                end
+
+                -- Reset flag notifikasi & simpan daftar item sebelum melempar
+                catchNotifiedThisCycle = false
+                local beforeTools = SnapshotOwnedTools()
+
+                local ok = pcall(function()
+                    local startRes = ThrowStart:InvokeServer()
+                    if startRes == false then
+                        ThrowComplete:InvokeServer()
+                        task.wait(0.15)
+                        startRes = ThrowStart:InvokeServer()
+                    end
+
+                    task.wait(0.08)
+                    if not runningSteal then return end
                     ThrowMeter:FireServer()
-                    task.wait(0.05)
-                    ThrowResolve:InvokeServer(1) 
-                    task.wait(0.05)
-                    ThrowComplete:InvokeServer() 
+
+                    task.wait(0.08)
+                    if not runningSteal then return end
+                    local resolveRes = ThrowResolve:InvokeServer(1)
+
+                    task.wait(0.08)
+                    if not runningSteal then return end
+                    local completeRes = ThrowComplete:InvokeServer()
+
+                    lastCycleTick = tick()
+
+                    -- Tunggu singkat agar replikasi Backpack / GUI selesai
+                    task.wait(0.12)
+
+                    -- Hanya tampilkan 1x notifikasi jika benar-benar ada pet yang tertangkap
+                    local notifTitle, notifDetail = ParseThrowResult(resolveRes, completeRes)
+                    if notifTitle then
+                        RegisterVerifiedCatch(notifTitle, notifDetail)
+                    else
+                        local newTool = FindNewlyAddedTool(beforeTools)
+                        if newTool then
+                            local petName = newTool:GetAttribute("DisplayName") or newTool:GetAttribute("AnimalName") or newTool.Name
+                            local mutation = tostring(newTool:GetAttribute("Mutation") or "None")
+                            local weight = newTool:GetAttribute("Weight")
+                            local cps = newTool:GetAttribute("CPS") or newTool:GetAttribute("CashPerSecond")
+                            local detail = string.format(
+                                "Mutation: %s | Weight: %s | CPS: %s",
+                                mutation,
+                                weight and (tostring(weight) .. " kg") or "-",
+                                cps and ("$" .. FormatShortNumber(cps) .. "/s") or "-"
+                            )
+                            RegisterVerifiedCatch(tostring(petName) .. " Obtained!", detail)
+                        end
+                    end
                 end)
-            end)
+
+                if not ok then
+                    pcall(function() ThrowComplete:InvokeServer() end)
+                    task.wait(0.3)
+                else
+                    task.wait(0.25)
+                end
+            else
+                task.wait(0.3)
+            end
+        else
+            lastCycleTick = tick()
+            task.wait(0.25)
         end
     end
 end)
 
+-- Loop 3: Auto Equip Best (15 Detik)
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
     if not Remotes then return end
@@ -355,6 +679,7 @@ task.spawn(function()
     end
 end)
 
+-- Loop 4: Auto Buy Best Food
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
     if not Remotes then return end
@@ -373,6 +698,7 @@ task.spawn(function()
     end
 end)
 
+-- Loop 5: Auto Upgrade Stand
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
     if not Remotes then return end
