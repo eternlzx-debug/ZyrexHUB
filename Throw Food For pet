@@ -1,14 +1,21 @@
--- Skrip Auto Farm Ultimate v35 (Tiered Mutation, Size & Rarity Notif) by ZyrexScript
+-- Skrip Auto Farm Ultimate v35 (Auto Game Title + Tiered Notif) by ZyrexScript
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 if CoreGui:FindFirstChild("ZyrexHub") then
     CoreGui.ZyrexHub:Destroy()
 end
+
+-- === DETEKSI NAMA GAME OTOMATIS ===
+local okGame, gameInfo = pcall(function()
+    return MarketplaceService:GetProductInfo(game.PlaceId)
+end)
+local gameName = (okGame and gameInfo and gameInfo.Name) or "Throw Food for Animals"
 
 local runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
 local savedPadCFrame, cframeLockConnection, charAddedConnection, guiAddedConnection = nil, nil, nil, nil
@@ -419,14 +426,15 @@ TopBar.BackgroundTransparency = 1
 TopBar.Parent = MainFrame
 
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(0, 200, 1, 0)
+Title.Size = UDim2.new(1, -85, 1, 0)
 Title.Position = UDim2.new(0, 15, 0, 0)
 Title.BackgroundTransparency = 1
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 16
+Title.TextSize = 15
 Title.Font = Enum.Font.GothamBold
-Title.Text = "ZyrexHub v35"
+Title.Text = "ZyrexHub | " .. gameName
 Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextTruncate = Enum.TextTruncate.AtEnd
 Title.Parent = TopBar
 
 local SubTitle = Instance.new("TextLabel")
