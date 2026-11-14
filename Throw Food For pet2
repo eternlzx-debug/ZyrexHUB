@@ -1,4 +1,4 @@
--- ZyrexHub V2 (Modern Card UI + Smart Anti-Spam Buy + Micro-Step Wakeup) by ZyrexScript
+-- ZyrexHub V2 (Full AFK Edition: Auto Sell, Collect, Rebirth, Anti-AFK & Webhook) by ZyrexScript
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -7,6 +7,8 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local MarketplaceService = game:GetService("MarketplaceService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
 
 if CoreGui:FindFirstChild("ZyrexHub") then
     CoreGui.ZyrexHub:Destroy()
@@ -22,15 +24,24 @@ local gameName = (okGame and gameInfo and gameInfo.Name) or "Throw Food for Anim
 local runningTap = false
 local runningSteal = false
 local runningEquip = false
+local runningSell = false
 local runningUpgrade = false
 local runningFood = false
+local runningCollect = false
+local runningRebirth = false
 local runningMicroStep = true
+local runningAntiAfk = true
+local notifRareOnly = false
+local webhookEnabled = false
+local webhookUrl = ""
 
 local savedPadCFrame = nil
 local isMicroStepping = false
 local connections = {}
+local sessionStartTick = tick()
 
 local totalStealCount = 0
+local totalSoldCount = 0
 local catchNotifiedThisCycle = false
 local lastCatchTick = 0
 local lastPlotFullTick = 0
@@ -43,11 +54,15 @@ local foodWaitingForCash = false
 local standWaitingForCash = false
 local bestAffordableFoodIdx = nil
 local lastKnownCashSnapshot = ""
+local lastNumericCash = nil
 local cashIncreasedSignal = false
 
 -- Referensi Label Status Live di UI
 local statusFoodLbl = nil
 local statusStandLbl = nil
+local statusSellLbl = nil
+local statusCollectLbl = nil
+local statusRebirthLbl = nil
 local statStealCountLbl = nil
 local statCashLbl = nil
 
@@ -57,7 +72,7 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = gethui and gethui() or CoreGui
 
--- === PALET WARNA ZYREX V2 (OBSIDIAN CRIMSON GLASS) ===
+-- === PALET WARNA ZYREX V2 ===
 local THEME = {
     BgMain      = Color3.fromRGB(14, 11, 16),
     BgSidebar   = Color3.fromRGB(19, 14, 21),
@@ -68,12 +83,30 @@ local THEME = {
     AccentSoft  = Color3.fromRGB(180, 32, 72),
     Gold        = Color3.fromRGB(255, 195, 65),
     Green       = Color3.fromRGB(65, 220, 130),
+    Blue        = Color3.fromRGB(80, 195, 255),
     TextPrimary = Color3.fromRGB(245, 245, 248),
     TextMuted   = Color3.fromRGB(155, 145, 160),
     SwitchOff   = Color3.fromRGB(46, 38, 48),
 }
 
--- === HELPER DRAG (SUPPORT MOBILE TOUCH & PC MOUSE) ===
+-- === KATA KUNCI WHITELIST (DILINDUNGI DARI AUTO SELL & PRIORITAS NOTIF) ===
+local PROTECTED_KEYWORDS = {
+    "gold", "diamond", "emerald", "ruby", "rainbow",
+    "huge", "colossal", "gigantic", "titanic", "monstrous", "cosmic", "infinite",
+    "rare", "epic", "legendary", "mythic", "secret", "divine", "celestial", "eternal", "supreme", "sovereign"
+}
+
+local function IsRareOrMutated(text)
+    local lower = tostring(text or ""):lower()
+    for _, kw in ipairs(PROTECTED_KEYWORDS) do
+        if lower:find(kw, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- === HELPER DRAG (MOBILE TOUCH & PC MOUSE) ===
 local function MakeDraggable(dragHandle, targetFrame)
     local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
     table.insert(connections, dragHandle.InputBegan:Connect(function(input)
@@ -104,23 +137,56 @@ local function MakeDraggable(dragHandle, targetFrame)
     end))
 end
 
--- === PEWARNAAN KARTU NOTIFIKASI OTOMATIS DARI TEKS GAME ===
+-- === DISCORD WEBHOOK SENDER ===
+local function SendDiscordWebhook(titleText, detailText, hexColor)
+    if not webhookUrl or not webhookUrl:find("discord.com/api/webhooks/") then return false end
+    local httpReq = (syn and syn.request) or (http and http.request) or http_request or request
+    if not httpReq then return false end
+
+    local payload = {
+        username = "ZyrexHub V2 Logger",
+        avatar_url = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(LocalPlayer.UserId) .. "&width=150&height=150&format=png",
+        embeds = {{
+            title = titleText,
+            description = detailText,
+            color = hexColor or 16723555,
+            fields = {
+                { name = "Player", value = LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")", inline = true },
+                { name = "Game", value = gameName, inline = true },
+                { name = "Total Sesi", value = tostring(totalStealCount) .. " Pet", inline = true }
+            },
+            footer = { text = "ZyrexScript • " .. os.date("%H:%M:%S") }
+        }}
+    }
+
+    local ok = pcall(function()
+        httpReq({
+            Url = webhookUrl,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
+    return ok
+end
+
+-- === PEWARNAAN KARTU NOTIFIKASI OTOMATIS ===
 local function ResolveCardStyleFromText(text)
     local lower = tostring(text or ""):lower()
     if lower:find("rainbow") or lower:find("sovereign") or lower:find("infinite") then
-        return Color3.fromRGB(255, 80, 210), true
+        return Color3.fromRGB(255, 80, 210), true, 16732370
     elseif lower:find("supreme") or lower:find("cosmic") or lower:find("celestial") or lower:find("eternal") then
-        return Color3.fromRGB(195, 95, 255), false
+        return Color3.fromRGB(195, 95, 255), false, 12804095
     elseif lower:find("divine") or lower:find("secret") or lower:find("mythic") or lower:find("ruby") then
-        return Color3.fromRGB(255, 55, 95), false
+        return Color3.fromRGB(255, 55, 95), false, 16725855
     elseif lower:find("legendary") or lower:find("gold") or lower:find("titanic") then
-        return Color3.fromRGB(255, 195, 50), false
+        return Color3.fromRGB(255, 195, 50), false, 16761650
     elseif lower:find("emerald") or lower:find("uncommon") then
-        return Color3.fromRGB(60, 220, 125), false
+        return Color3.fromRGB(60, 220, 125), false, 3988605
     elseif lower:find("diamond") or lower:find("rare") or lower:find("epic") or lower:find("huge") then
-        return Color3.fromRGB(80, 200, 255), false
+        return Color3.fromRGB(80, 200, 255), false, 5294335
     end
-    return THEME.Accent, false
+    return THEME.Accent, false, 16723555
 end
 
 -- === SISTEM NOTIFIKASI KANAN LAYAR ===
@@ -239,8 +305,8 @@ end
 
 -- === PILL STATUS BAWAH LAYAR ===
 local StealPill = Instance.new("TextLabel")
-StealPill.Size = UDim2.new(0, 215, 0, 32)
-StealPill.Position = UDim2.new(0.5, -107, 0.87, 0)
+StealPill.Size = UDim2.new(0, 225, 0, 32)
+StealPill.Position = UDim2.new(0.5, -112, 0.87, 0)
 StealPill.BackgroundColor3 = THEME.BgMain
 StealPill.BackgroundTransparency = 0.15
 StealPill.TextColor3 = THEME.Accent
@@ -258,6 +324,9 @@ PillStroke.Transparency = 0.35
 PillStroke.Parent = StealPill
 
 local function RegisterVerifiedCatch(titleText, detailText)
+    local combined = titleText .. " " .. (detailText or "")
+    local isRare = IsRareOrMutated(combined)
+
     if catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.75 then
         if lastCatchNotifRef and lastCatchNotifRef.detailLbl and lastCatchNotifRef.detailLbl.Parent then
             if detailText and detailText ~= "" and #detailText > #lastCatchNotifRef.detail then
@@ -267,18 +336,31 @@ local function RegisterVerifiedCatch(titleText, detailText)
         end
         return
     end
+
     catchNotifiedThisCycle = true
     lastCatchTick = tick()
     totalStealCount += 1
     StealPill.Text = "⚡ STEALING ACTIVE (" .. totalStealCount .. ")"
     if statStealCountLbl then
-        statStealCountLbl.Text = "Total tertangkap sesi ini: " .. totalStealCount .. " Pet"
+        statStealCountLbl.Text = "Tertangkap: " .. totalStealCount .. " Pet  •  Terjual: " .. totalSoldCount
     end
-    local col, rb = ResolveCardStyleFromText(titleText .. " " .. (detailText or ""))
+
+    local col, rb, hexCol = ResolveCardStyleFromText(combined)
+
+    if webhookEnabled and isRare then
+        task.spawn(function()
+            SendDiscordWebhook("🎉 Rare Catch: " .. titleText, detailText or "Tangkapan langka berhasil!", hexCol)
+        end)
+    end
+
+    if notifRareOnly and not isRare then
+        return
+    end
+
     lastCatchNotifRef = ShowNotif(titleText, detailText, col, rb)
 end
 
--- === PEMANTAU SALDO UANG OTOMATIS (UNLOCK SMART BUY SAAT SALDO NAIK) ===
+-- === PEMANTAU SALDO UANG OTOMATIS ===
 local function ParseCashValue(str)
     if type(str) ~= "string" then return nil end
     local numPart, suffix = str:match("%$?%s*([%d%.]+)%s*(%a*)")
@@ -294,7 +376,14 @@ local function ParseCashValue(str)
     return num * m
 end
 
-local lastNumericCash = nil
+local function ResetSmartBuyState()
+    foodWaitingForCash = false
+    standWaitingForCash = false
+    insufficientCashFlag = false
+    bestAffordableFoodIdx = nil
+    cashIncreasedSignal = true
+end
+
 local function OnCashTextObserved(rawText)
     if not rawText or rawText == "" then return end
     if rawText ~= lastKnownCashSnapshot then
@@ -304,16 +393,19 @@ local function OnCashTextObserved(rawText)
         end
         local numeric = ParseCashValue(rawText)
         if numeric then
-            if lastNumericCash and numeric > lastNumericCash then
-                -- Saldo naik! Buka kunci Smart Buy Food & Stand
-                foodWaitingForCash = false
-                standWaitingForCash = false
-                insufficientCashFlag = false
-                cashIncreasedSignal = true
+            if lastNumericCash then
+                if numeric > lastNumericCash then
+                    foodWaitingForCash = false
+                    standWaitingForCash = false
+                    insufficientCashFlag = false
+                    cashIncreasedSignal = true
+                elseif numeric < (lastNumericCash * 0.15) then
+                    -- Terdeteksi Rebirth / reset saldo -> reset tier food ke awal
+                    ResetSmartBuyState()
+                end
             end
             lastNumericCash = numeric
         else
-            -- Jika format teks berubah meski bukan angka standar, tetap buka kunci dengan aman
             foodWaitingForCash = false
             standWaitingForCash = false
             cashIncreasedSignal = true
@@ -321,11 +413,108 @@ local function OnCashTextObserved(rawText)
     end
 end
 
--- === LISTENER PLAYERGUI (DIRECT CATCH MIRROR + DETEKSI "TIDAK CUKUP UANG!") ===
+-- === DETEKSI REMOTES DINAMIS ===
+local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
+local ShopBuyRemote = RemotesFolder and RemotesFolder:WaitForChild("Shop_Buy", 10)
+local StandUpgradeRemote = RemotesFolder and RemotesFolder:WaitForChild("Stand_Upgrade", 10)
+local PlotEquipBestRemote = RemotesFolder and RemotesFolder:WaitForChild("Plot_EquipBest", 10)
+
+local function FindRemoteByKeywords(keywords)
+    local searchRoots = { RemotesFolder, ReplicatedStorage }
+    for _, root in ipairs(searchRoots) do
+        if root then
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                    local nl = obj.Name:lower()
+                    for _, kw in ipairs(keywords) do
+                        if nl:find(kw, 1, true) then
+                            return obj
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local CollectRemote = FindRemoteByKeywords({"collect", "claimcash", "claim_cash", "claimmoney", "plot_claim"})
+local SellRemote = FindRemoteByKeywords({"sell", "pet_sell", "animal_sell", "plot_sell"})
+local RebirthRemote = FindRemoteByKeywords({"rebirth"})
+
+local function FireOrInvoke(remote, ...)
+    if not remote then return false, nil end
+    local args = { ... }
+    if remote:IsA("RemoteFunction") then
+        return pcall(function() return remote:InvokeServer(unpack(args)) end)
+    elseif remote:IsA("RemoteEvent") then
+        return pcall(function() remote:FireServer(unpack(args)) end)
+    end
+    return false, nil
+end
+
+-- === FUNGSI AUTO SELL LOW-TIER (DENGAN WHITELIST) ===
+local function IsToolProtected(tool)
+    if IsRareOrMutated(tool.Name) or IsRareOrMutated(tool.ToolTip) then
+        return true
+    end
+    for k, v in pairs(tool:GetAttributes()) do
+        local ks = tostring(k):lower()
+        local vs = tostring(v):lower()
+        if (ks:find("mut") or ks:find("rar") or ks:find("size") or ks:find("tier")) and vs ~= "normal" and vs ~= "common" and vs ~= "none" and vs ~= "" then
+            return true
+        end
+        if IsRareOrMutated(vs) then
+            return true
+        end
+    end
+    return false
+end
+
+local function RunAutoSellCycle()
+    if not runningSell then return end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local char = LocalPlayer.Character
+    if not bp or not char then return end
+
+    local soldThisPass = 0
+    for _, item in ipairs(bp:GetChildren()) do
+        if not runningSell then break end
+        if item:IsA("Tool") and not IsToolProtected(item) then
+            local petId = item:GetAttribute("Id") or item:GetAttribute("ID") or item:GetAttribute("UUID") or item:GetAttribute("Guid") or item.Name
+            if SellRemote then
+                FireOrInvoke(SellRemote, petId)
+                FireOrInvoke(SellRemote, item.Name)
+            end
+            -- Juga dukung mekanik jual dengan cara memegang tool saat berada di zona jual
+            pcall(function()
+                item.Parent = char
+                task.wait(0.05)
+                if SellRemote then
+                    FireOrInvoke(SellRemote)
+                end
+            end)
+            soldThisPass += 1
+            totalSoldCount += 1
+            task.wait(0.08)
+            if soldThisPass >= 5 then break end
+        end
+    end
+
+    if soldThisPass > 0 then
+        if statusSellLbl then
+            statusSellLbl.Text = "Status: Terjual " .. totalSoldCount .. " pet biasa (Whitelist aman)"
+        end
+        if statStealCountLbl then
+            statStealCountLbl.Text = "Tertangkap: " .. totalStealCount .. " Pet  •  Terjual: " .. totalSoldCount
+        end
+    end
+end
+
+-- === LISTENER PLAYERGUI (CATCH MIRROR + ANTI-SPAM + AUTO SELL TRIGGER) ===
 table.insert(connections, LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc)
     if not desc:IsA("TextLabel") then return end
 
-    -- Pantau perubahan teks saldo uang di HUD (contoh: $6.63Td)
     task.defer(function()
         if not desc or not desc.Parent then return end
         local txt = desc.Text
@@ -341,35 +530,27 @@ table.insert(connections, LocalPlayer.PlayerGui.DescendantAdded:Connect(function
 
         local lower = txt:lower()
 
-        -- 1. Deteksi notif bawaan game "Tidak cukup uang!" agar Smart Buy langsung berhenti spam
         if lower:find("tidak cukup uang") or lower:find("uang tidak cukup") or lower:find("not enough") or lower:find("insufficient") then
             insufficientCashFlag = true
             lastInsufficientTick = tick()
             if runningFood then
                 foodWaitingForCash = true
-                if statusFoodLbl then
-                    statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)"
-                end
+                if statusFoodLbl then statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)" end
             end
             if runningUpgrade then
                 standWaitingForCash = true
-                if statusStandLbl then
-                    statusStandLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)"
-                end
+                if statusStandLbl then statusStandLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)" end
             end
             return
         end
 
-        -- 2. Direct Mirroring Notif Tangkapan Resmi Game ("Obtained!")
         if runningSteal and txt:find("Obtained!") then
             task.wait(0.08)
             if not desc or not desc.Parent then return end
             local parts = {}
             local scanRoot = desc.Parent
             if scanRoot and scanRoot.Parent and not scanRoot.Parent:IsA("ScreenGui") and not scanRoot.Parent:IsA("PlayerGui") then
-                if #scanRoot:GetDescendants() <= 5 then
-                    scanRoot = scanRoot.Parent
-                end
+                if #scanRoot:GetDescendants() <= 5 then scanRoot = scanRoot.Parent end
             end
             if scanRoot then
                 for _, child in ipairs(scanRoot:GetDescendants()) do
@@ -380,14 +561,18 @@ table.insert(connections, LocalPlayer.PlayerGui.DescendantAdded:Connect(function
             end
             local detailStr = (#parts > 0) and table.concat(parts, "  •  ") or "Berhasil masuk ke inventory!"
             RegisterVerifiedCatch(txt, detailStr)
-        elseif runningSteal and lower:find("plot is full") and (tick() - lastPlotFullTick) > 5 then
-            lastPlotFullTick = tick()
-            ShowNotif("Plot Penuh!", txt, Color3.fromRGB(255, 85, 85), false)
+        elseif lower:find("plot is full") or lower:find("penuh") then
+            if runningSell then
+                task.spawn(RunAutoSellCycle)
+            end
+            if runningSteal and (tick() - lastPlotFullTick) > 6 then
+                lastPlotFullTick = tick()
+                ShowNotif("Plot / Tas Penuh!", runningSell and "Auto Sell sedang membersihkan pet biasa..." or txt, Color3.fromRGB(255, 85, 85), false)
+            end
         end
     end)
 end))
 
--- Cek label saldo yang sudah ada saat skrip pertama kali dijalankan
 task.defer(function()
     for _, gui in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
         if gui:IsA("TextLabel") and gui.Text:match("^%$[%d%.]+%a*$") then
@@ -400,7 +585,17 @@ task.defer(function()
     end
 end)
 
--- === SNAPSHOT INVENTORY (BACKUP DETEKSI TOOL BARU) ===
+-- === ANTI-AFK 20 MENIT BYPASS ===
+table.insert(connections, LocalPlayer.Idled:Connect(function()
+    if runningAntiAfk then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end))
+
+-- === SNAPSHOT INVENTORY ===
 local function SnapshotOwnedTools()
     local items = {}
     local bp = LocalPlayer:FindFirstChild("Backpack")
@@ -418,13 +613,13 @@ local function FindNewlyAddedTool(beforeSnapshot)
     return nil
 end
 
--- === FLOATING LOGO MINIMIZE (DRAGGABLE) ===
+-- === FLOATING LOGO MINIMIZE ===
 local FloatingBtn = Instance.new("ImageButton")
 FloatingBtn.Name = "FloatingLogo"
 FloatingBtn.Size = UDim2.new(0, 58, 0, 58)
 FloatingBtn.Position = UDim2.new(0.06, 0, 0.22, 0)
 FloatingBtn.BackgroundColor3 = THEME.BgMain
-FloatingBtn.Image = "rbxassetid://113865305400607"
+FloatingBtn.Image = "rbxassetid://15282876614"
 FloatingBtn.ScaleType = Enum.ScaleType.Fit
 FloatingBtn.BorderSizePixel = 0
 FloatingBtn.Visible = false
@@ -437,11 +632,40 @@ FloatStroke.Thickness = 2
 FloatStroke.Parent = FloatingBtn
 MakeDraggable(FloatingBtn, FloatingBtn)
 
+-- === BLACK-SCREEN AFK OVERLAY (BATTERY SAVER) ===
+local AfkOverlay = Instance.new("TextButton")
+AfkOverlay.Name = "AfkBatteryOverlay"
+AfkOverlay.Size = UDim2.new(1, 0, 1, 0)
+AfkOverlay.BackgroundColor3 = Color3.fromRGB(6, 5, 8)
+AfkOverlay.Text = ""
+AfkOverlay.AutoButtonColor = false
+AfkOverlay.Visible = false
+AfkOverlay.ZIndex = 50
+AfkOverlay.Parent = ScreenGui
+
+local AfkInfoLbl = Instance.new("TextLabel")
+AfkInfoLbl.Size = UDim2.new(0.9, 0, 0, 120)
+AfkInfoLbl.Position = UDim2.new(0.05, 0, 0.5, -60)
+AfkInfoLbl.BackgroundTransparency = 1
+AfkInfoLbl.TextColor3 = THEME.TextPrimary
+AfkInfoLbl.TextSize = 15
+AfkInfoLbl.Font = Enum.Font.GothamBold
+AfkInfoLbl.Text = "🌙 ZYREX AFK BATTERY SAVER AKTIF\n3D Rendering dimatikan untuk menghemat baterai & suhu.\n\nKetuk layar di mana saja untuk kembali."
+AfkInfoLbl.ZIndex = 51
+AfkInfoLbl.Parent = AfkOverlay
+
+local disableBlackScreenCallback = nil
+AfkOverlay.MouseButton1Click:Connect(function()
+    AfkOverlay.Visible = false
+    pcall(function() RunService:Set3dRenderingEnabled(true) end)
+    if disableBlackScreenCallback then disableBlackScreenCallback() end
+end)
+
 -- === MAIN WINDOW V2 ===
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainWindow"
-MainFrame.Size = UDim2.new(0, 550, 0, 345)
-MainFrame.Position = UDim2.new(0.5, -275, 0.5, -172)
+MainFrame.Size = UDim2.new(0, 560, 0, 355)
+MainFrame.Position = UDim2.new(0.5, -280, 0.5, -177)
 MainFrame.BackgroundColor3 = THEME.BgMain
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -453,17 +677,16 @@ MainStroke.Color = THEME.Border
 MainStroke.Thickness = 1.5
 MainStroke.Parent = MainFrame
 
--- Background Artwork Halus
 local BgImage = Instance.new("ImageLabel")
 BgImage.Size = UDim2.new(1, 0, 1, 0)
 BgImage.BackgroundTransparency = 1
 BgImage.Image = "rbxassetid://84587193599064"
 BgImage.ScaleType = Enum.ScaleType.Crop
-BgImage.ImageTransparency = 0.84
+BgImage.ImageTransparency = 0.85
 BgImage.Parent = MainFrame
 Instance.new("UICorner", BgImage).CornerRadius = UDim.new(0, 14)
 
--- === TOP BAR V2 ===
+-- === TOP BAR ===
 local TopBar = Instance.new("Frame")
 TopBar.Size = UDim2.new(1, 0, 0, 48)
 TopBar.BackgroundColor3 = THEME.BgSidebar
@@ -479,7 +702,6 @@ TopDivider.BackgroundColor3 = THEME.Border
 TopDivider.BorderSizePixel = 0
 TopDivider.Parent = TopBar
 
--- Icon Logo Header
 local HeaderIcon = Instance.new("ImageLabel")
 HeaderIcon.Size = UDim2.new(0, 30, 0, 30)
 HeaderIcon.Position = UDim2.new(0, 14, 0.5, -15)
@@ -513,11 +735,10 @@ SubTitleLbl.BackgroundTransparency = 1
 SubTitleLbl.TextColor3 = THEME.TextMuted
 SubTitleLbl.TextSize = 11
 SubTitleLbl.Font = Enum.Font.Gotham
-SubTitleLbl.Text = "ZyrexScript  •  discord.gg/zyrex"
+SubTitleLbl.Text = "Full AFK Edition  •  discord.gg/zyrex"
 SubTitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 SubTitleLbl.Parent = TopBar
 
--- Tombol Kontrol Window (Minimize, Compact Toggle, Close)
 local function CreateHeaderBtn(text, offsetX, hoverColor)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0, 26, 0, 26)
@@ -551,7 +772,7 @@ local MinimizeBtn = CreateHeaderBtn("–", -102, THEME.BgCardHover)
 local isCompactMode = false
 CompactBtn.MouseButton1Click:Connect(function()
     isCompactMode = not isCompactMode
-    local targetSize = isCompactMode and UDim2.new(0, 470, 0, 290) or UDim2.new(0, 550, 0, 345)
+    local targetSize = isCompactMode and UDim2.new(0, 475, 0, 295) or UDim2.new(0, 560, 0, 355)
     TweenService:Create(MainFrame, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = targetSize}):Play()
 end)
 
@@ -566,14 +787,16 @@ FloatingBtn.MouseButton1Click:Connect(function()
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
-    runningTap, runningSteal, runningEquip, runningUpgrade, runningFood, runningMicroStep = false, false, false, false, false, false
+    runningTap, runningSteal, runningEquip, runningSell = false, false, false, false
+    runningUpgrade, runningFood, runningCollect, runningRebirth, runningMicroStep = false, false, false, false, false
+    pcall(function() RunService:Set3dRenderingEnabled(true) end)
     for _, conn in ipairs(connections) do
         if conn and conn.Connected then conn:Disconnect() end
     end
     ScreenGui:Destroy()
 end)
 
--- === SIDEBAR KIRI + KARTU PROFIL PLAYER ===
+-- === SIDEBAR + PROFIL PLAYER ===
 local SideBar = Instance.new("Frame")
 SideBar.Size = UDim2.new(0, 165, 1, -48)
 SideBar.Position = UDim2.new(0, 0, 0, 48)
@@ -598,9 +821,8 @@ TabListFrame.Parent = SideBar
 local TabLayout = Instance.new("UIListLayout")
 TabLayout.Parent = TabListFrame
 TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-TabLayout.Padding = UDim.new(0, 6)
+TabLayout.Padding = UDim.new(0, 5)
 
--- Kartu Profil Pemain di Bawah Sidebar
 local ProfileCard = Instance.new("Frame")
 ProfileCard.Size = UDim2.new(1, -16, 0, 52)
 ProfileCard.Position = UDim2.new(0, 8, 1, -60)
@@ -630,9 +852,7 @@ task.spawn(function()
     local okThumb, content = pcall(function()
         return Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
     end)
-    if okThumb and content then
-        AvatarImg.Image = content
-    end
+    if okThumb and content then AvatarImg.Image = content end
 end)
 
 local DisplayNameLbl = Instance.new("TextLabel")
@@ -659,7 +879,7 @@ UserNameLbl.TextXAlignment = Enum.TextXAlignment.Left
 UserNameLbl.TextTruncate = Enum.TextTruncate.AtEnd
 UserNameLbl.Parent = ProfileCard
 
--- === CONTAINER HALAMAN KONTEN (KANAN) ===
+-- === CONTAINER HALAMAN ===
 local PagesContainer = Instance.new("Frame")
 PagesContainer.Size = UDim2.new(1, -177, 1, -60)
 PagesContainer.Position = UDim2.new(0, 171, 0, 54)
@@ -671,7 +891,7 @@ local activeTabName = nil
 
 local function CreateTab(tabName, iconGlyph)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 36)
+    btn.Size = UDim2.new(1, 0, 0, 34)
     btn.BackgroundColor3 = THEME.BgCard
     btn.BackgroundTransparency = 1
     btn.Text = ""
@@ -722,16 +942,10 @@ local function CreateTab(tabName, iconGlyph)
     layout.Padding = UDim.new(0, 8)
 
     table.insert(connections, layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 12)
+        page.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 14)
     end))
 
-    local tabObj = {
-        btn = btn,
-        indicator = indicator,
-        iconLbl = iconLbl,
-        textLbl = textLbl,
-        page = page
-    }
+    local tabObj = { btn = btn, indicator = indicator, iconLbl = iconLbl, textLbl = textLbl, page = page }
     tabs[tabName] = tabObj
 
     local function SelectTab()
@@ -749,14 +963,11 @@ local function CreateTab(tabName, iconGlyph)
     end
 
     btn.MouseButton1Click:Connect(SelectTab)
-    if not activeTabName then
-        SelectTab()
-    end
-
+    if not activeTabName then SelectTab() end
     return page
 end
 
--- === BUILDER KARTU FITUR V2 (TITLE + DESKRIPSI + TOGGLE / ACTION ICON) ===
+-- === BUILDER KARTU FITUR V2 ===
 local function CreateCardToggle(parentPage, titleText, descText, defaultState, callback)
     local card = Instance.new("Frame")
     card.Size = UDim2.new(1, -6, 0, 56)
@@ -810,8 +1021,8 @@ local function CreateCardToggle(parentPage, titleText, descText, defaultState, c
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local state = defaultState or false
-    switchBtn.MouseButton1Click:Connect(function()
-        state = not state
+    local function SetState(newState, silent)
+        state = newState
         TweenService:Create(switchBtn, TweenInfo.new(0.18), {
             BackgroundColor3 = state and THEME.Accent or THEME.SwitchOff
         }):Play()
@@ -822,10 +1033,14 @@ local function CreateCardToggle(parentPage, titleText, descText, defaultState, c
         TweenService:Create(stroke, TweenInfo.new(0.18), {
             Color = state and THEME.AccentSoft or THEME.Border
         }):Play()
-        callback(state, desc)
+        if not silent then callback(state, desc) end
+    end
+
+    switchBtn.MouseButton1Click:Connect(function()
+        SetState(not state, false)
     end)
 
-    return desc
+    return desc, SetState
 end
 
 local function CreateCardAction(parentPage, titleText, descText, actionGlyph, callback)
@@ -882,13 +1097,65 @@ local function CreateCardAction(parentPage, titleText, descText, actionGlyph, ca
         task.delay(0.2, function()
             if stroke then TweenService:Create(stroke, TweenInfo.new(0.2), {Color = THEME.Border}):Play() end
         end)
-        callback(desc)
+        callback(desc, badge)
     end)
 
     return desc
 end
 
--- === POSISI LOCK + MICRO-STEP WAKEUP ENGINE ===
+local function CreateCardInput(parentPage, titleText, placeholderText, onChanged)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, -6, 0, 68)
+    card.BackgroundColor3 = THEME.BgCard
+    card.BackgroundTransparency = 0.18
+    card.Parent = parentPage
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = THEME.Border
+    stroke.Thickness = 1
+    stroke.Parent = card
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -28, 0, 18)
+    title.Position = UDim2.new(0, 14, 0, 7)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = THEME.TextPrimary
+    title.TextSize = 12
+    title.Font = Enum.Font.GothamBold
+    title.Text = titleText
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = card
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -28, 0, 28)
+    box.Position = UDim2.new(0, 14, 0, 30)
+    box.BackgroundColor3 = THEME.BgSidebar
+    box.TextColor3 = THEME.TextPrimary
+    box.PlaceholderColor3 = THEME.TextMuted
+    box.PlaceholderText = placeholderText
+    box.Text = ""
+    box.ClearTextOnFocus = false
+    box.TextSize = 11
+    box.Font = Enum.Font.Gotham
+    box.TextXAlignment = Enum.TextXAlignment.Left
+    box.TextTruncate = Enum.TextTruncate.AtEnd
+    box.Parent = card
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 7)
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 8)
+    pad.PaddingRight = UDim.new(0, 8)
+    pad.Parent = box
+
+    box.FocusLost:Connect(function()
+        onChanged(box.Text)
+    end)
+
+    return box
+end
+
+-- === POSISI LOCK + MICRO-STEP WAKEUP ===
 local function StartPositionLock()
     table.insert(connections, RunService.Heartbeat:Connect(function()
         if runningSteal and savedPadCFrame and not isMicroStepping then
@@ -908,18 +1175,13 @@ StartPositionLock()
 table.insert(connections, LocalPlayer.CharacterAdded:Connect(function(newChar)
     if runningSteal and savedPadCFrame then
         local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
-        if hrp then
-            task.wait(0.1)
-            hrp.CFrame = savedPadCFrame
-        end
+        if hrp then task.wait(0.1) hrp.CFrame = savedPadCFrame end
     end
 end))
 
--- Langkah mikro ringan agar zona Shop & Stand tetap merespons meski karakter diam
 local lastMicroStepTick = 0
 local function PerformMicroStepWakeup()
-    if not runningMicroStep then return end
-    if (tick() - lastMicroStepTick) < 1.8 then return end
+    if not runningMicroStep or (tick() - lastMicroStepTick) < 1.8 then return end
     lastMicroStepTick = tick()
 
     local char = LocalPlayer.Character
@@ -941,116 +1203,107 @@ local function PerformMicroStepWakeup()
     isMicroStepping = false
 end
 
--- === REMOTES ===
-local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
-local ShopBuyRemote = RemotesFolder and RemotesFolder:WaitForChild("Shop_Buy", 10)
-local StandUpgradeRemote = RemotesFolder and RemotesFolder:WaitForChild("Stand_Upgrade", 10)
-local PlotEquipBestRemote = RemotesFolder and RemotesFolder:WaitForChild("Plot_EquipBest", 10)
-
--- === SMART ANTI-SPAM BUY FOOD LOGIC ===
+-- === SMART ANTI-SPAM BUY FOOD ===
 local function TrySingleFoodBuy(index)
     if not ShopBuyRemote then return false end
     insufficientCashFlag = false
-    local ok, res = pcall(function()
-        return ShopBuyRemote:InvokeServer(index)
-    end)
-    task.wait(0.16) -- Beri waktu singkat agar server merespons jika uang tidak cukup
-    if insufficientCashFlag or (tick() - lastInsufficientTick) < 0.35 then
-        return false
-    end
-    if ok and res ~= false then
-        return true
-    end
-    return false
+    local ok, res = pcall(function() return ShopBuyRemote:InvokeServer(index) end)
+    task.wait(0.16)
+    if insufficientCashFlag or (tick() - lastInsufficientTick) < 0.35 then return false end
+    return ok and res ~= false
 end
 
 local function RunSmartFoodCycle()
-    if not runningFood or not ShopBuyRemote then return end
-
-    -- Jika sedang menunggu uang cukup, jangan spam beli!
-    if foodWaitingForCash then
-        return
-    end
-
+    if not runningFood or not ShopBuyRemote or foodWaitingForCash then return end
     PerformMicroStepWakeup()
 
-    -- Kasus 1: Sudah tahu tier makanan terbaik yang terjangkau
     if bestAffordableFoodIdx then
-        -- Cek 1 kali apakah naik 1 tier di atasnya sudah kebeli
-        if bestAffordableFoodIdx < 60 then
-            if TrySingleFoodBuy(bestAffordableFoodIdx + 1) then
-                bestAffordableFoodIdx += 1
-                if statusFoodLbl then
-                    statusFoodLbl.Text = "Status: Berhasil beli Food Tier #" .. bestAffordableFoodIdx
-                end
-                return
-            end
+        if bestAffordableFoodIdx < 60 and TrySingleFoodBuy(bestAffordableFoodIdx + 1) then
+            bestAffordableFoodIdx += 1
+            if statusFoodLbl then statusFoodLbl.Text = "Status: Berhasil beli Food Tier #" .. bestAffordableFoodIdx end
+            return
         end
-
-        -- Beli tier terbaik saat ini (1 kali saja)
-        insufficientCashFlag = false
         if TrySingleFoodBuy(bestAffordableFoodIdx) then
-            if statusFoodLbl then
-                statusFoodLbl.Text = "Status: Membeli Food Tier #" .. bestAffordableFoodIdx
-            end
+            if statusFoodLbl then statusFoodLbl.Text = "Status: Membeli Food Tier #" .. bestAffordableFoodIdx end
         else
-            -- Gagal / Tidak cukup uang -> langsung kunci tanpa spam!
             foodWaitingForCash = true
-            if statusFoodLbl then
-                statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)"
-            end
+            if statusFoodLbl then statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)" end
         end
         return
     end
 
-    -- Kasus 2: Pencarian pertama kali untuk menemukan makanan tertinggi yang sanggup dibeli
     for i = 60, 1, -1 do
         if not runningFood then return end
         if TrySingleFoodBuy(i) then
             bestAffordableFoodIdx = i
-            if statusFoodLbl then
-                statusFoodLbl.Text = "Status: Terkunci di Food Tier #" .. i
-            end
+            if statusFoodLbl then statusFoodLbl.Text = "Status: Terkunci di Food Tier #" .. i end
             return
         end
-        -- Jika di tier 1 saja tidak cukup uang, langsung pause!
         if i == 1 then
             foodWaitingForCash = true
-            if statusFoodLbl then
-                statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)"
-            end
+            if statusFoodLbl then statusFoodLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)" end
         end
     end
 end
 
--- === SMART ANTI-SPAM UPGRADE STAND LOGIC ===
+-- === SMART ANTI-SPAM UPGRADE STAND ===
 local function RunSmartStandCycle()
-    if not runningUpgrade or not StandUpgradeRemote then return end
-    if standWaitingForCash then return end
-
+    if not runningUpgrade or not StandUpgradeRemote or standWaitingForCash then return end
     PerformMicroStepWakeup()
 
     insufficientCashFlag = false
-    local ok, res = pcall(function()
-        return StandUpgradeRemote:InvokeServer()
-    end)
+    local ok, res = pcall(function() return StandUpgradeRemote:InvokeServer() end)
     task.wait(0.18)
 
     if insufficientCashFlag or (tick() - lastInsufficientTick) < 0.35 or (ok and res == false) then
         standWaitingForCash = true
-        if statusStandLbl then
-            statusStandLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)"
-        end
+        if statusStandLbl then statusStandLbl.Text = "Status: Menunggu uang cukup (Anti-Spam aktif)" end
     else
-        if statusStandLbl then
-            statusStandLbl.Text = "Status: Stand upgraded! Siap cek berikutnya"
+        if statusStandLbl then statusStandLbl.Text = "Status: Stand upgraded! Siap cek berikutnya" end
+    end
+end
+
+-- === AUTO COLLECT CASH (REMOTE + TOUCH PAD) ===
+local function RunAutoCollectCycle()
+    if not runningCollect then return end
+    if CollectRemote then
+        FireOrInvoke(CollectRemote)
+    end
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp and firetouchinterest then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local nl = obj.Name:lower()
+                if nl:find("collect") or nl:find("claim") or nl:find("cashpad") or nl:find("money") then
+                    if (obj.Position - hrp.Position).Magnitude < 120 then
+                        pcall(function()
+                            firetouchinterest(hrp, obj, 0)
+                            task.wait(0.02)
+                            firetouchinterest(hrp, obj, 1)
+                        end)
+                    end
+                end
+            end
         end
     end
 end
 
--- === MEMBUAT TAB & KARTU MENU V2 ===
+-- === AUTO REBIRTH + AUTO-RESET SMART BUY ===
+local function RunAutoRebirthCycle()
+    if not runningRebirth or not RebirthRemote then return end
+    local beforeCash = lastNumericCash
+    local ok, res = FireOrInvoke(RebirthRemote)
+    task.wait(0.25)
+    if ok and res ~= false and beforeCash and lastNumericCash and lastNumericCash < (beforeCash * 0.2) then
+        ResetSmartBuyState()
+        ShowNotif("Rebirth Sukses!", "Smart Buy Food & Stand di-reset ke Tier awal.", THEME.Gold, false)
+    end
+end
+
+-- === MEMBUAT 4 TAB & KARTU MENU ===
 local FarmPage = CreateTab("Auto Farm", "⚡")
 local ShopPage = CreateTab("Auto Shop", "🛒")
+local AfkPage  = CreateTab("AFK & Notif", "🛡️")
 local StatsPage = CreateTab("Live Stats", "📊")
 
 -- TAB 1: AUTO FARM
@@ -1079,7 +1332,17 @@ CreateCardToggle(FarmPage, "Auto Equip Best", "Pasang pet dengan pendapatan tert
     end
 end)
 
--- TAB 2: AUTO SHOP (ANTI-SPAM)
+statusSellLbl = CreateCardToggle(FarmPage, "Auto Sell Low-Tier (Whitelist)", "Jual pet Normal/Common otomatis; mutasi & Rare+ aman", false, function(state, desc)
+    runningSell = state
+    if state then
+        desc.Text = "Status: Aktif (Mutasi, Huge+ & Rare+ dilindungi)"
+        task.spawn(RunAutoSellCycle)
+    else
+        desc.Text = "Status: Nonaktif"
+    end
+end)
+
+-- TAB 2: AUTO SHOP
 statusFoodLbl = CreateCardToggle(ShopPage, "Smart Auto Buy Food", "Status: Siap membeli makanan terbaik tanpa spam", false, function(state, desc)
     runningFood = state
     if state then
@@ -1103,19 +1366,83 @@ statusStandLbl = CreateCardToggle(ShopPage, "Smart Auto Upgrade Stand", "Status:
     end
 end)
 
+statusCollectLbl = CreateCardToggle(ShopPage, "Auto Collect Cash", "Ambil uang dari stand otomatis agar Smart Buy terus jalan", false, function(state, desc)
+    runningCollect = state
+    desc.Text = state and "Status: Aktif mengambil pendapatan stand tiap 2.5s" or "Status: Nonaktif"
+    if state then task.spawn(RunAutoCollectCycle) end
+end)
+
+statusRebirthLbl = CreateCardToggle(ShopPage, "Auto Rebirth + Reset Buy", "Otomatis Rebirth saat syarat terpenuhi & reset tier food", false, function(state, desc)
+    runningRebirth = state
+    desc.Text = state and (RebirthRemote and "Status: Memantau syarat Rebirth..." or "Status: Mencari remote Rebirth...") or "Status: Nonaktif"
+end)
+
 CreateCardToggle(ShopPage, "Auto Micro-Step Wakeup", "Gerak mikro otomatis agar shop/stand aktif saat diam", true, function(state)
     runningMicroStep = state
 end)
 
--- TAB 3: LIVE STATS & QUICK ACTIONS
-statStealCountLbl = CreateCardAction(StatsPage, "Statistik Tangkapan Sesi", "Total tertangkap sesi ini: 0 Pet", "🐾", function()
-    ShowNotif("Statistik Sesi", "Total tertangkap: " .. totalStealCount .. " Pet", THEME.Green, false)
+-- TAB 3: AFK & NOTIFIKASI
+CreateCardToggle(AfkPage, "Built-in Anti-AFK (20m Bypass)", "Cegah kick otomatis dari Roblox saat ditinggal AFK lama", true, function(state)
+    runningAntiAfk = state
+end)
+
+local _, setBlackScreenToggle = CreateCardToggle(AfkPage, "Black-Screen Battery Saver", "Matikan 3D Render saat AFK (ketuk layar hitam untuk bangun)", false, function(state)
+    AfkOverlay.Visible = state
+    pcall(function() RunService:Set3dRenderingEnabled(not state) end)
+end)
+disableBlackScreenCallback = function()
+    setBlackScreenToggle(false, true)
+end
+
+CreateCardAction(AfkPage, "Filter Notifikasi Layar", "Mode saat ini: Semua Tangkapan (klik untuk ubah)", "🔔", function(desc, badge)
+    notifRareOnly = not notifRareOnly
+    if notifRareOnly then
+        desc.Text = "Mode saat ini: Hanya Rare, Mutasi & Ukuran Besar"
+        badge.Text = "★"
+        ShowNotif("Filter Notif Diubah", "Hanya tangkapan Rare/Mutasi yang ditampilkan.", THEME.Gold, false)
+    else
+        desc.Text = "Mode saat ini: Semua Tangkapan"
+        badge.Text = "🔔"
+        ShowNotif("Filter Notif Diubah", "Menampilkan semua hasil tangkapan.", THEME.Blue, false)
+    end
+end)
+
+CreateCardInput(AfkPage, "Discord Webhook URL (Rare+ Logger)", "Tempel URL https://discord.com/api/webhooks/...", function(txt)
+    webhookUrl = txt:gsub("%s+", "")
+end)
+
+CreateCardToggle(AfkPage, "Aktifkan Discord Webhook", "Kirim embed otomatis ke Discord saat dapat pet Rare/Mutasi", false, function(state, desc)
+    if state and not webhookUrl:find("discord.com/api/webhooks/") then
+        desc.Text = "Tempel URL Webhook yang valid di kotak atas dulu!"
+        ShowNotif("Webhook Belum Diisi", "Masukkan URL Webhook Discord di kotak input.", Color3.fromRGB(255, 85, 85), false)
+        return
+    end
+    webhookEnabled = state
+    desc.Text = state and "Aktif: Mengirim log tangkapan langka ke Discord" or "Nonaktif"
+end)
+
+CreateCardAction(AfkPage, "Test Kirim Discord Webhook", "Uji koneksi webhook ke server Discord kamu", "📨", function(desc)
+    if not webhookUrl:find("discord.com/api/webhooks/") then
+        desc.Text = "URL Webhook belum valid!"
+        return
+    end
+    desc.Text = "Mengirim pesan uji coba..."
+    task.spawn(function()
+        local sent = SendDiscordWebhook("✅ ZyrexHub V2 Connected!", "Webhook logger aktif dan siap mencatat tangkapan langka.", 4316290)
+        desc.Text = sent and "Berhasil terkirim! Cek channel Discord kamu." or "Gagal mengirim (cek URL atau executor HTTP)."
+    end)
+end)
+
+-- TAB 4: LIVE STATS
+statStealCountLbl = CreateCardAction(StatsPage, "Statistik Tangkapan & Jual", "Tertangkap: 0 Pet  •  Terjual: 0", "🐾", function()
+    local elapsed = math.floor(tick() - sessionStartTick)
+    local mins = math.floor(elapsed / 60)
+    local secs = elapsed % 60
+    ShowNotif("Ringkasan Sesi (" .. mins .. "m " .. secs .. "s)", "Tertangkap: " .. totalStealCount .. " | Terjual: " .. totalSoldCount, THEME.Green, false)
 end)
 
 statCashLbl = CreateCardAction(StatsPage, "Monitor Saldo & Reset Lock", "Saldo terdeteksi: " .. (lastKnownCashSnapshot ~= "" and lastKnownCashSnapshot or "Menunggu update..."), "💰", function(desc)
-    foodWaitingForCash = false
-    standWaitingForCash = false
-    bestAffordableFoodIdx = nil
+    ResetSmartBuyState()
     desc.Text = "Kunci Anti-Spam di-reset! Mengecek ulang pembelian..."
     ShowNotif("Smart Buy Reset", "Kunci anti-spam dibuka untuk pengecekan ulang.", THEME.Gold, false)
 end)
@@ -1247,7 +1574,43 @@ task.spawn(function()
     end
 end)
 
--- Loop 4: Smart Auto Buy Food (Non-Spam, Bangun Otomatis Saat Saldo Naik)
+-- Loop 4: Auto Sell Low-Tier (Setiap 4 detik)
+task.spawn(function()
+    while ScreenGui.Parent do
+        if runningSell then
+            RunAutoSellCycle()
+            task.wait(4)
+        else
+            task.wait(0.4)
+        end
+    end
+end)
+
+-- Loop 5: Auto Collect Cash (Setiap 2.5 detik)
+task.spawn(function()
+    while ScreenGui.Parent do
+        if runningCollect then
+            RunAutoCollectCycle()
+            task.wait(2.5)
+        else
+            task.wait(0.4)
+        end
+    end
+end)
+
+-- Loop 6: Auto Rebirth (Setiap 5 detik)
+task.spawn(function()
+    while ScreenGui.Parent do
+        if runningRebirth then
+            RunAutoRebirthCycle()
+            task.wait(5)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- Loop 7: Smart Auto Buy Food (Anti-Spam)
 task.spawn(function()
     local lastCheck = 0
     while ScreenGui.Parent do
@@ -1264,7 +1627,7 @@ task.spawn(function()
     end
 end)
 
--- Loop 5: Smart Auto Upgrade Stand (Non-Spam, Bangun Otomatis Saat Saldo Naik)
+-- Loop 8: Smart Auto Upgrade Stand (Anti-Spam)
 task.spawn(function()
     local lastCheck = 0
     while ScreenGui.Parent do
@@ -1280,3 +1643,4 @@ task.spawn(function()
         end
     end
 end)
+  
