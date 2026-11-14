@@ -1,9 +1,9 @@
--- Skrip Auto Farm Ultimate v34 (Single Verified Catch Notif Edition) by ZyrexScript
+-- Skrip Auto Farm Ultimate v35 (Tiered Mutation, Size & Rarity Notif) by ZyrexScript
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService") 
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 if CoreGui:FindFirstChild("ZyrexHub") then
@@ -11,41 +11,96 @@ if CoreGui:FindFirstChild("ZyrexHub") then
 end
 
 local runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
-local savedPadCFrame = nil 
-local cframeLockConnection = nil 
-local charAddedConnection = nil
-local guiAddedConnection = nil
-
-local totalStealCount = 0
-local catchNotifiedThisCycle = false
-local lastCatchTick = 0
-local lastPlotFullTick = 0
+local savedPadCFrame, cframeLockConnection, charAddedConnection, guiAddedConnection = nil, nil, nil, nil
+local totalStealCount, catchNotifiedThisCycle, lastCatchTick, lastPlotFullTick = 0, false, 0, 0
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "ZyrexHub"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = gethui and gethui() or CoreGui
 
--- === FORMATTER ANGKA (CPS / UANG) ===
+-- === TABEL DATA MUTATION, SIZE & RARITY ===
+local MUTATION_TIERS = {
+    normal  = { rank = 1, label = "Normal (1x)",   color = Color3.fromRGB(190, 195, 205) },
+    gold    = { rank = 2, label = "Gold (1.5x)",   color = Color3.fromRGB(255, 210, 50)  },
+    diamond = { rank = 3, label = "Diamond",       color = Color3.fromRGB(80, 225, 255)  },
+    emerald = { rank = 4, label = "Emerald",       color = Color3.fromRGB(45, 225, 115)  },
+    ruby    = { rank = 5, label = "Ruby",          color = Color3.fromRGB(255, 50, 90)   },
+    rainbow = { rank = 6, label = "Rainbow (20x)", color = Color3.fromRGB(255, 110, 255), rainbow = true },
+}
+
+local SIZE_TIERS = {
+    normal    = { rank = 1, label = "Normal",         color = Color3.fromRGB(185, 190, 200) },
+    big       = { rank = 1, label = "Big",            color = Color3.fromRGB(185, 190, 200) },
+    large     = { rank = 1, label = "Large",          color = Color3.fromRGB(195, 205, 215) },
+    huge      = { rank = 2, label = "Huge",           color = Color3.fromRGB(90, 195, 255)  },
+    colossal  = { rank = 2, label = "Colossal",       color = Color3.fromRGB(90, 195, 255)  },
+    gigantic  = { rank = 2, label = "Gigantic",       color = Color3.fromRGB(110, 165, 255) },
+    titanic   = { rank = 3, label = "Titanic",        color = Color3.fromRGB(255, 165, 55)  },
+    monstrous = { rank = 3, label = "Monstrous",      color = Color3.fromRGB(255, 130, 55)  },
+    cosmic    = { rank = 3, label = "Cosmic",         color = Color3.fromRGB(210, 105, 255) },
+    infinite  = { rank = 4, label = "Infinite 700x+", color = Color3.fromRGB(255, 65, 145)  },
+}
+
+local RARITY_TIERS = {
+    common    = { rank = 1, label = "Common",    color = Color3.fromRGB(175, 180, 190) },
+    uncommon  = { rank = 2, label = "Uncommon",  color = Color3.fromRGB(95, 215, 120)  },
+    rare      = { rank = 3, label = "Rare",      color = Color3.fromRGB(70, 175, 255)  },
+    epic      = { rank = 4, label = "Epic",      color = Color3.fromRGB(175, 95, 255)  },
+    legendary = { rank = 5, label = "Legendary", color = Color3.fromRGB(255, 195, 45)  },
+    mythic    = { rank = 6, label = "Mythic",    color = Color3.fromRGB(255, 75, 75)   },
+    secret    = { rank = 7, label = "Secret",    color = Color3.fromRGB(255, 40, 115)  },
+    divine    = { rank = 8, label = "Divine",    color = Color3.fromRGB(120, 245, 255) },
+    celestial = { rank = 9, label = "Celestial", color = Color3.fromRGB(255, 225, 130) },
+    eternal   = { rank = 10, label = "Eternal",  color = Color3.fromRGB(80, 255, 200)  },
+    cosmic    = { rank = 11, label = "Cosmic",   color = Color3.fromRGB(195, 90, 255)  },
+    supreme   = { rank = 12, label = "Supreme",  color = Color3.fromRGB(255, 115, 40)  },
+    sovereign = { rank = 13, label = "Sovereign",color = Color3.fromRGB(255, 55, 155), rainbow = true },
+}
+
 local function FormatShortNumber(num)
     if type(num) ~= "number" then return tostring(num) end
-    local suffixes = {"", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"}
+    local suffixes = {"", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc", "Udc", "Ddc", "Tdc", "Ocd"}
     local idx = 1
     while math.abs(num) >= 1000 and idx < #suffixes do
         num = num / 1000
         idx = idx + 1
     end
-    if idx == 1 then
-        return tostring(math.floor(num))
-    end
-    return string.format("%.2f%s", num, suffixes[idx]):gsub("%.00", "")
+    return idx == 1 and tostring(math.floor(num)) or (string.format("%.2f%s", num, suffixes[idx]):gsub("%.00", ""))
 end
 
--- === SISTEM NOTIFIKASI HASIL STEAL (KANAN LAYAR) ===
+local function MatchTier(tbl, rawVal, fallbackKey)
+    if rawVal then
+        local clean = tostring(rawVal):lower():gsub("[%s_%-%[%]]", "")
+        for key, info in pairs(tbl) do
+            if clean == key or clean:find(key, 1, true) then
+                return key, info
+            end
+        end
+    end
+    return fallbackKey, tbl[fallbackKey]
+end
+
+local function DetectTraitsFromString(str)
+    local lower = tostring(str or ""):lower()
+    local mutKey, sizeKey, rarKey = nil, nil, nil
+    for k in pairs(MUTATION_TIERS) do
+        if k ~= "normal" and lower:find(k, 1, true) then mutKey = k break end
+    end
+    for k in pairs(SIZE_TIERS) do
+        if k ~= "normal" and k ~= "cosmic" and lower:find(k, 1, true) then sizeKey = k break end
+    end
+    for k in pairs(RARITY_TIERS) do
+        if lower:find(k, 1, true) then rarKey = k break end
+    end
+    return mutKey, sizeKey, rarKey
+end
+
+-- === CONTAINER NOTIFIKASI KANAN LAYAR ===
 local NotifyContainer = Instance.new("Frame")
 NotifyContainer.Name = "ZyrexNotifications"
-NotifyContainer.Size = UDim2.new(0, 270, 0.7, 0)
-NotifyContainer.Position = UDim2.new(1, -285, 0.15, 0)
+NotifyContainer.Size = UDim2.new(0, 295, 0.75, 0)
+NotifyContainer.Position = UDim2.new(1, -310, 0.12, 0)
 NotifyContainer.BackgroundTransparency = 1
 NotifyContainer.Parent = ScreenGui
 
@@ -56,60 +111,104 @@ NotifyLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 NotifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
 NotifyLayout.Padding = UDim.new(0, 8)
 
-local function ShowResultNotif(titleText, detailText, accentColor)
-    local color = accentColor or Color3.fromRGB(255, 50, 100)
+local function ShowTieredNotif(opts)
+    local mutKey, mutInfo = MatchTier(MUTATION_TIERS, opts.mutation, "normal")
+    local sizeKey, sizeInfo = MatchTier(SIZE_TIERS, opts.size, "normal")
+    local rarKey, rarInfo = MatchTier(RARITY_TIERS, opts.rarity, "common")
+
+    local isJackpot = (mutKey == "rainbow" and sizeKey == "infinite")
+    local isRainbow = mutInfo.rainbow or rarInfo.rainbow or isJackpot
+    local accentColor = opts.customColor or (mutInfo.rank >= 3 and mutInfo.color) or (sizeInfo.rank >= 3 and sizeInfo.color) or rarInfo.color
 
     local Wrapper = Instance.new("Frame")
-    Wrapper.Size = UDim2.new(1, 0, 0, 56)
+    Wrapper.Size = UDim2.new(1, 0, 0, opts.compact and 54 or 72)
     Wrapper.BackgroundTransparency = 1
     Wrapper.Parent = NotifyContainer
 
     local Card = Instance.new("Frame")
     Card.Size = UDim2.new(1, 0, 1, 0)
     Card.Position = UDim2.new(1, 30, 0, 0)
-    Card.BackgroundColor3 = Color3.fromRGB(20, 14, 18)
-    Card.BackgroundTransparency = 0.12
+    Card.BackgroundColor3 = Color3.fromRGB(18, 13, 18)
+    Card.BackgroundTransparency = 0.1
     Card.BorderSizePixel = 0
     Card.Parent = Wrapper
     Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 8)
 
     local CardStroke = Instance.new("UIStroke")
-    CardStroke.Color = color
-    CardStroke.Thickness = 1.5
-    CardStroke.Transparency = 0.3
+    CardStroke.Color = accentColor
+    CardStroke.Thickness = isJackpot and 2 or 1.5
+    CardStroke.Transparency = 0.2
     CardStroke.Parent = Card
 
     local AccentBar = Instance.new("Frame")
-    AccentBar.Size = UDim2.new(0, 4, 0.7, 0)
-    AccentBar.Position = UDim2.new(0, 8, 0.15, 0)
-    AccentBar.BackgroundColor3 = color
+    AccentBar.Size = UDim2.new(0, 4, 0.74, 0)
+    AccentBar.Position = UDim2.new(0, 8, 0.13, 0)
+    AccentBar.BackgroundColor3 = accentColor
     AccentBar.BorderSizePixel = 0
     AccentBar.Parent = Card
     Instance.new("UICorner", AccentBar).CornerRadius = UDim.new(1, 0)
 
     local TitleLbl = Instance.new("TextLabel")
-    TitleLbl.Size = UDim2.new(1, -38, 0, 22)
-    TitleLbl.Position = UDim2.new(0, 20, 0, 6)
+    TitleLbl.Size = UDim2.new(1, -38, 0, 20)
+    TitleLbl.Position = UDim2.new(0, 18, 0, 6)
     TitleLbl.BackgroundTransparency = 1
+    TitleLbl.RichText = true
     TitleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
     TitleLbl.TextSize = 13
     TitleLbl.Font = Enum.Font.GothamBold
     TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
     TitleLbl.TextTruncate = Enum.TextTruncate.AtEnd
-    TitleLbl.Text = titleText
+
+    if opts.compact then
+        TitleLbl.Text = opts.title
+    else
+        local rHex = string.format("#%02X%02X%02X", math.floor(rarInfo.color.R * 255), math.floor(rarInfo.color.G * 255), math.floor(rarInfo.color.B * 255))
+        local tag = isJackpot and "<font color='#FF4191'>[14,000x+]</font> " or string.format("<font color='%s'>[%s]</font> ", rHex, rarInfo.label)
+        TitleLbl.Text = tag .. opts.title
+    end
     TitleLbl.Parent = Card
 
-    local DetailLbl = Instance.new("TextLabel")
-    DetailLbl.Size = UDim2.new(1, -28, 0, 20)
-    DetailLbl.Position = UDim2.new(0, 20, 0, 28)
-    DetailLbl.BackgroundTransparency = 1
-    DetailLbl.TextColor3 = Color3.fromRGB(190, 190, 195)
-    DetailLbl.TextSize = 11
-    DetailLbl.Font = Enum.Font.Gotham
-    DetailLbl.TextXAlignment = Enum.TextXAlignment.Left
-    DetailLbl.TextTruncate = Enum.TextTruncate.AtEnd
-    DetailLbl.Text = detailText
-    DetailLbl.Parent = Card
+    if opts.compact then
+        local SubLbl = Instance.new("TextLabel")
+        SubLbl.Size = UDim2.new(1, -26, 0, 18)
+        SubLbl.Position = UDim2.new(0, 18, 0, 28)
+        SubLbl.BackgroundTransparency = 1
+        SubLbl.TextColor3 = Color3.fromRGB(195, 195, 205)
+        SubLbl.TextSize = 11
+        SubLbl.Font = Enum.Font.Gotham
+        SubLbl.TextXAlignment = Enum.TextXAlignment.Left
+        SubLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        SubLbl.Text = opts.detail or ""
+        SubLbl.Parent = Card
+    else
+        local mHex = string.format("#%02X%02X%02X", math.floor(mutInfo.color.R * 255), math.floor(mutInfo.color.G * 255), math.floor(mutInfo.color.B * 255))
+        local sHex = string.format("#%02X%02X%02X", math.floor(sizeInfo.color.R * 255), math.floor(sizeInfo.color.G * 255), math.floor(sizeInfo.color.B * 255))
+
+        local TraitLbl = Instance.new("TextLabel")
+        TraitLbl.Size = UDim2.new(1, -24, 0, 18)
+        TraitLbl.Position = UDim2.new(0, 18, 0, 27)
+        TraitLbl.BackgroundTransparency = 1
+        TraitLbl.RichText = true
+        TraitLbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+        TraitLbl.TextSize = 11
+        TraitLbl.Font = Enum.Font.GothamSemibold
+        TraitLbl.TextXAlignment = Enum.TextXAlignment.Left
+        TraitLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        TraitLbl.Text = string.format("Mut: <font color='%s'>%s</font>  •  Size: <font color='%s'>%s</font>", mHex, mutInfo.label, sHex, sizeInfo.label)
+        TraitLbl.Parent = Card
+
+        local StatLbl = Instance.new("TextLabel")
+        StatLbl.Size = UDim2.new(1, -24, 0, 17)
+        StatLbl.Position = UDim2.new(0, 18, 0, 46)
+        StatLbl.BackgroundTransparency = 1
+        StatLbl.TextColor3 = Color3.fromRGB(170, 175, 185)
+        StatLbl.TextSize = 11
+        StatLbl.Font = Enum.Font.Gotham
+        StatLbl.TextXAlignment = Enum.TextXAlignment.Left
+        StatLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        StatLbl.Text = string.format("Weight: %s  •  CPS: %s", opts.weight or "-", opts.cps or "-")
+        StatLbl.Parent = Card
+    end
 
     local CloseNotif = Instance.new("TextButton")
     CloseNotif.Size = UDim2.new(0, 18, 0, 18)
@@ -122,9 +221,21 @@ local function ShowResultNotif(titleText, detailText, accentColor)
     CloseNotif.Parent = Card
 
     local dismissed = false
+    local rainbowConn = nil
+
+    if isRainbow then
+        rainbowConn = RunService.RenderStepped:Connect(function()
+            if dismissed then return end
+            local c = Color3.fromHSV((tick() * 0.6) % 1, 0.85, 1)
+            CardStroke.Color = c
+            AccentBar.BackgroundColor3 = c
+        end)
+    end
+
     local function Dismiss()
         if dismissed then return end
         dismissed = true
+        if rainbowConn then rainbowConn:Disconnect() end
         local outTween = TweenService:Create(Card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
             Position = UDim2.new(1, 30, 0, 0),
             BackgroundTransparency = 1
@@ -136,12 +247,10 @@ local function ShowResultNotif(titleText, detailText, accentColor)
     end
 
     CloseNotif.MouseButton1Click:Connect(Dismiss)
-
     TweenService:Create(Card, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
         Position = UDim2.new(0, 0, 0, 0)
     }):Play()
-
-    task.delay(3.5, Dismiss)
+    task.delay(4, Dismiss)
 end
 
 -- === INDIKATOR STATUS BAWAH ===
@@ -156,160 +265,157 @@ StealIndicator.Font = Enum.Font.GothamBold
 StealIndicator.Text = "STEALING ACTIVE (0)"
 StealIndicator.Visible = false
 StealIndicator.Parent = ScreenGui
-Instance.new("UICorner", StealIndicator).CornerRadius = UDim.new(1, 0) 
+Instance.new("UICorner", StealIndicator).CornerRadius = UDim.new(1, 0)
 
--- === FUNGSI TRIGGER 1X NOTIFIKASI SAAT TANGKAPAN SUKSES ===
-local function RegisterVerifiedCatch(titleText, detailText)
-    if catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.7 then
-        return
-    end
+local function RegisterVerifiedCatch(catchData)
+    if catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.7 then return end
     catchNotifiedThisCycle = true
     lastCatchTick = tick()
     totalStealCount += 1
     StealIndicator.Text = "STEALING ACTIVE (" .. totalStealCount .. ")"
-    ShowResultNotif(titleText, detailText, Color3.fromRGB(80, 220, 120))
+    ShowTieredNotif(catchData)
 end
 
--- === PARSER DATA HASIL THROW DARI SERVER ===
 local function ParseThrowResult(res1, res2)
     local data = (type(res2) == "table" and res2) or (type(res1) == "table" and res1) or nil
     if data then
-        local petInfo = data.Animal or data.Pet or data.Reward or data.Data or data
-        if type(petInfo) == "table" then
-            local petName = petInfo.Name or petInfo.AnimalName or petInfo.PetName or petInfo.Id or petInfo.ID
-            if petName then
-                local mutation = tostring(petInfo.Mutation or petInfo.Variant or "None")
-                local rawWeight = petInfo.Weight or petInfo.Mass or petInfo.Size
-                local weightStr = rawWeight and (tostring(rawWeight) .. ((tostring(rawWeight):find("kg") or tostring(rawWeight):find("t")) and "" or " kg")) or "-"
-                local rawCps = petInfo.CPS or petInfo.CashPerSecond or petInfo.Income or petInfo.Rate
-                local cpsStr = rawCps and ("$" .. FormatShortNumber(rawCps) .. "/s") or "-"
-                return tostring(petName) .. " Obtained!", string.format("Mutation: %s | Weight: %s | CPS: %s", mutation, weightStr, cpsStr)
+        local pet = data.Animal or data.Pet or data.Reward or data.Data or data
+        if type(pet) == "table" then
+            local name = pet.Name or pet.AnimalName or pet.PetName or pet.Id or pet.ID
+            if name then
+                local mTxt, sTxt, rTxt = DetectTraitsFromString(name)
+                local rawWeight = pet.Weight or pet.Mass
+                local rawCps = pet.CPS or pet.CashPerSecond or pet.Income or pet.Rate
+                return {
+                    title = tostring(name) .. " Obtained!",
+                    mutation = pet.Mutation or pet.Variant or mTxt or "Normal",
+                    size = pet.Size or pet.Scale or sTxt or "Normal",
+                    rarity = pet.Rarity or pet.Tier or rTxt or "Common",
+                    weight = rawWeight and (tostring(rawWeight) .. ((tostring(rawWeight):find("kg") or tostring(rawWeight):find("t")) and "" or " kg")) or "-",
+                    cps = rawCps and ("$" .. FormatShortNumber(rawCps) .. "/s") or "-"
+                }
             end
         end
-    elseif type(res2) == "string" and #res2 > 1 then
-        return res2 .. " Obtained!", "Berhasil ditangkap oleh Auto Steal"
-    elseif type(res1) == "string" and #res1 > 1 then
-        return res1 .. " Obtained!", "Berhasil ditangkap oleh Auto Steal"
-    end
-    return nil, nil
-end
-
--- === LISTENER NOTIFIKASI RESMI GAME ("Obtained!" & "Plot is full") ===
-guiAddedConnection = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc)
-    if not runningSteal then return end
-    if desc:IsA("TextLabel") then
-        task.defer(function()
-            task.wait(0.05)
-            if not desc or not desc.Parent then return end
-            local txt = desc.Text
-            if type(txt) ~= "string" or txt == "" then return end
-
-            if txt:find("Obtained!") then
-                local detail = "Pet baru berhasil masuk ke inventory!"
-                for _, sibling in ipairs(desc.Parent:GetChildren()) do
-                    if sibling:IsA("TextLabel") and sibling ~= desc and (sibling.Text:find("Mutation") or sibling.Text:find("CPS") or sibling.Text:find("Weight")) then
-                        detail = sibling.Text
-                        break
-                    end
-                end
-                RegisterVerifiedCatch(txt, detail)
-            elseif txt:lower():find("plot is full") then
-                if (tick() - lastPlotFullTick) > 5 then
-                    lastPlotFullTick = tick()
-                    ShowResultNotif("Plot Penuh!", txt, Color3.fromRGB(255, 80, 80))
-                end
-            end
-        end)
-    end
-end)
-
--- === HELPER SNAPSHOT INVENTORY (BACKPACK & CHARACTER) ===
-local function SnapshotOwnedTools()
-    local items = {}
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if backpack then
-        for _, item in ipairs(backpack:GetChildren()) do
-            items[item] = true
-        end
-    end
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") then
-                items[item] = true
-            end
-        end
-    end
-    return items
-end
-
-local function FindNewlyAddedTool(beforeSnapshot)
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if backpack then
-        for _, item in ipairs(backpack:GetChildren()) do
-            if not beforeSnapshot[item] then
-                return item
-            end
-        end
-    end
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and not beforeSnapshot[item] then
-                return item
-            end
-        end
+    elseif (type(res2) == "string" and #res2 > 1) or (type(res1) == "string" and #res1 > 1) then
+        local rawName = (type(res2) == "string" and #res2 > 1) and res2 or res1
+        local mTxt, sTxt, rTxt = DetectTraitsFromString(rawName)
+        return {
+            title = rawName .. " Obtained!",
+            mutation = mTxt or "Normal",
+            size = sTxt or "Normal",
+            rarity = rTxt or "Common",
+            weight = "-",
+            cps = "-"
+        }
     end
     return nil
 end
 
--- === FLOATING LOGO ===
+-- === LISTENER NOTIFIKASI BAWAAN GAME ===
+guiAddedConnection = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc)
+    if not runningSteal or not desc:IsA("TextLabel") then return end
+    task.defer(function()
+        task.wait(0.05)
+        if not desc or not desc.Parent then return end
+        local txt = desc.Text
+        if type(txt) ~= "string" or txt == "" then return end
+
+        if txt:find("Obtained!") then
+            local mTxt, sTxt, rTxt = DetectTraitsFromString(txt)
+            local weightStr, cpsStr = "-", "-"
+            for _, sib in ipairs(desc.Parent:GetChildren()) do
+                if sib:IsA("TextLabel") and sib ~= desc then
+                    local st = sib.Text
+                    local sm, ss, sr = DetectTraitsFromString(st)
+                    mTxt = mTxt or sm
+                    sTxt = sTxt or ss
+                    rTxt = rTxt or sr
+                    local wMatch = st:match("Weight:%s*([^|]+)")
+                    local cMatch = st:match("CPS:%s*([^|]+)")
+                    if wMatch then weightStr = wMatch:gsub("%s+$", "") end
+                    if cMatch then cpsStr = cMatch:gsub("%s+$", "") end
+                end
+            end
+            RegisterVerifiedCatch({
+                title = txt,
+                mutation = mTxt or "Normal",
+                size = sTxt or "Normal",
+                rarity = rTxt or "Common",
+                weight = weightStr,
+                cps = cpsStr
+            })
+        elseif txt:lower():find("plot is full") and (tick() - lastPlotFullTick) > 5 then
+            lastPlotFullTick = tick()
+            ShowTieredNotif({
+                compact = true,
+                title = "Plot Penuh!",
+                detail = txt,
+                customColor = Color3.fromRGB(255, 80, 80)
+            })
+        end
+    end)
+end)
+
+local function SnapshotOwnedTools()
+    local items = {}
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then for _, v in ipairs(bp:GetChildren()) do items[v] = true end end
+    local char = LocalPlayer.Character
+    if char then for _, v in ipairs(char:GetChildren()) do if v:IsA("Tool") then items[v] = true end end end
+    return items
+end
+
+local function FindNewlyAddedTool(beforeSnapshot)
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then for _, v in ipairs(bp:GetChildren()) do if not beforeSnapshot[v] then return v end end end
+    local char = LocalPlayer.Character
+    if char then for _, v in ipairs(char:GetChildren()) do if v:IsA("Tool") and not beforeSnapshot[v] then return v end end end
+    return nil
+end
+
+-- === FLOATING LOGO & MAIN UI ===
 local FloatingBtn = Instance.new("ImageButton")
 FloatingBtn.Name = "FloatingLogo"
 FloatingBtn.Size = UDim2.new(0, 50, 0, 50)
-FloatingBtn.Position = UDim2.new(0.5, -30, 0, 20) 
+FloatingBtn.Position = UDim2.new(0.5, -30, 0, 20)
 FloatingBtn.BackgroundColor3 = Color3.fromRGB(25, 15, 20)
-FloatingBtn.Image = "rbxassetid://100417413707381" 
-FloatingBtn.ScaleType = Enum.ScaleType.Fit 
+FloatingBtn.Image = "rbxassetid://113865305400607"
+FloatingBtn.ScaleType = Enum.ScaleType.Fit
 FloatingBtn.BorderSizePixel = 0
 FloatingBtn.Active = true
-FloatingBtn.Draggable = true 
-FloatingBtn.Visible = false 
+FloatingBtn.Draggable = true
+FloatingBtn.Visible = false
 FloatingBtn.Parent = ScreenGui
 Instance.new("UICorner", FloatingBtn).CornerRadius = UDim.new(0, 12)
 
 local FloatStroke = Instance.new("UIStroke")
-FloatStroke.Color = Color3.fromRGB(255, 50, 100) 
+FloatStroke.Color = Color3.fromRGB(255, 50, 100)
 FloatStroke.Thickness = 2
 FloatStroke.Parent = FloatingBtn
 
--- === FRAME UTAMA ===
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 520, 0, 320)
 MainFrame.Position = UDim2.new(0.5, -260, 0.5, -160)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18, 12, 16) 
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 12, 16)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 
--- === BACKGROUND IMAGE ===
 local BgImage = Instance.new("ImageLabel")
 BgImage.Size = UDim2.new(1, 0, 1, 0)
 BgImage.BackgroundTransparency = 1
-BgImage.Image = "rbxassetid://84587193599064" 
+BgImage.Image = "rbxassetid://84587193599064"
 BgImage.ScaleType = Enum.ScaleType.Crop
-BgImage.ImageTransparency = 0.65 
-BgImage.ImageColor3 = Color3.fromRGB(255, 255, 255) 
+BgImage.ImageTransparency = 0.65
+BgImage.ImageColor3 = Color3.fromRGB(255, 255, 255)
 BgImage.Parent = MainFrame
 Instance.new("UICorner", BgImage).CornerRadius = UDim.new(0, 12)
 
--- Header / Topbar
 local TopBar = Instance.new("Frame")
 TopBar.Size = UDim2.new(1, 0, 0, 40)
 TopBar.BackgroundTransparency = 1
-TopBar.BorderSizePixel = 0
 TopBar.Parent = MainFrame
 
 local Title = Instance.new("TextLabel")
@@ -319,7 +425,7 @@ Title.BackgroundTransparency = 1
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 16
 Title.Font = Enum.Font.GothamBold
-Title.Text = "ZyrexHub v34"
+Title.Text = "ZyrexHub v35"
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TopBar
 
@@ -334,7 +440,6 @@ SubTitle.Text = "discord.gg/zyrex"
 SubTitle.TextXAlignment = Enum.TextXAlignment.Left
 SubTitle.Parent = TopBar
 
--- Tombol Close & Minimize
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Size = UDim2.new(0, 24, 0, 24)
 CloseBtn.Position = UDim2.new(1, -34, 0, 10)
@@ -375,7 +480,6 @@ CloseBtn.MouseButton1Click:Connect(function()
     ScreenGui:Destroy()
 end)
 
--- Sidebar (Kiri)
 local SideBar = Instance.new("Frame")
 SideBar.Size = UDim2.new(0, 140, 1, -50)
 SideBar.Position = UDim2.new(0, 10, 0, 45)
@@ -387,7 +491,7 @@ Instance.new("UICorner", SideBar).CornerRadius = UDim.new(0, 8)
 local TabBtn = Instance.new("TextButton")
 TabBtn.Size = UDim2.new(0.9, 0, 0, 35)
 TabBtn.Position = UDim2.new(0.05, 0, 0, 10)
-TabBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 100) 
+TabBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 100)
 TabBtn.BackgroundTransparency = 0.2
 TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 TabBtn.Font = Enum.Font.GothamSemibold
@@ -397,7 +501,6 @@ TabBtn.TextXAlignment = Enum.TextXAlignment.Left
 TabBtn.Parent = SideBar
 Instance.new("UICorner", TabBtn).CornerRadius = UDim.new(0, 6)
 
--- Area Konten
 local Content = Instance.new("ScrollingFrame")
 Content.Size = UDim2.new(1, -170, 1, -50)
 Content.Position = UDim2.new(0, 160, 0, 45)
@@ -412,7 +515,6 @@ Layout.Parent = Content
 Layout.SortOrder = Enum.SortOrder.LayoutOrder
 Layout.Padding = UDim.new(0, 10)
 
--- FUNGSI PEMBUAT UI
 local function CreateSection(titleText)
     local sec = Instance.new("TextLabel")
     sec.Size = UDim2.new(1, -10, 0, 20)
@@ -432,7 +534,7 @@ local function CreateToggle(titleText, callback)
     tFrame.BackgroundTransparency = 0.4
     tFrame.Parent = Content
     Instance.new("UICorner", tFrame).CornerRadius = UDim.new(0, 8)
-    
+
     local tLabel = Instance.new("TextLabel")
     tLabel.Size = UDim2.new(0.7, 0, 1, 0)
     tLabel.Position = UDim2.new(0, 15, 0, 0)
@@ -443,18 +545,18 @@ local function CreateToggle(titleText, callback)
     tLabel.Text = titleText
     tLabel.TextXAlignment = Enum.TextXAlignment.Left
     tLabel.Parent = tFrame
-    
+
     local SwitchBase = Instance.new("TextButton")
     SwitchBase.Size = UDim2.new(0, 42, 0, 22)
     SwitchBase.Position = UDim2.new(1, -55, 0.5, -11)
-    SwitchBase.BackgroundColor3 = Color3.fromRGB(50, 40, 45) 
+    SwitchBase.BackgroundColor3 = Color3.fromRGB(50, 40, 45)
     SwitchBase.Text = ""
     SwitchBase.Parent = tFrame
-    Instance.new("UICorner", SwitchBase).CornerRadius = UDim.new(1, 0) 
-    
+    Instance.new("UICorner", SwitchBase).CornerRadius = UDim.new(1, 0)
+
     local SwitchCircle = Instance.new("Frame")
     SwitchCircle.Size = UDim2.new(0, 18, 0, 18)
-    SwitchCircle.Position = UDim2.new(0, 2, 0.5, -9) 
+    SwitchCircle.Position = UDim2.new(0, 2, 0.5, -9)
     SwitchCircle.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
     SwitchCircle.Parent = SwitchBase
     Instance.new("UICorner", SwitchCircle).CornerRadius = UDim.new(1, 0)
@@ -462,26 +564,22 @@ local function CreateToggle(titleText, callback)
     local state = false
     SwitchBase.MouseButton1Click:Connect(function()
         state = not state
-        local targetColor = state and Color3.fromRGB(255, 50, 100) or Color3.fromRGB(50, 40, 45)
-        local targetPos = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-        local circleColor = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
-        
-        TweenService:Create(SwitchBase, TweenInfo.new(0.2), {BackgroundColor3 = targetColor}):Play()
-        TweenService:Create(SwitchCircle, TweenInfo.new(0.2), {Position = targetPos, BackgroundColor3 = circleColor}):Play()
+        TweenService:Create(SwitchBase, TweenInfo.new(0.2), {
+            BackgroundColor3 = state and Color3.fromRGB(255, 50, 100) or Color3.fromRGB(50, 40, 45)
+        }):Play()
+        TweenService:Create(SwitchCircle, TweenInfo.new(0.2), {
+            Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9),
+            BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
+        }):Play()
         callback(state)
     end)
 end
 
--- === FUNGSI PENGUNCI POSISI (ANTI-BLINK) ===
 local function StartPositionLock()
-    if cframeLockConnection then
-        cframeLockConnection:Disconnect()
-        cframeLockConnection = nil
-    end
+    if cframeLockConnection then cframeLockConnection:Disconnect() end
     cframeLockConnection = RunService.Heartbeat:Connect(function()
         if runningSteal and savedPadCFrame then
-            local currentChar = LocalPlayer.Character
-            local hrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 hrp.AssemblyLinearVelocity = Vector3.zero
                 hrp.AssemblyAngularVelocity = Vector3.zero
@@ -496,35 +594,31 @@ end
 charAddedConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
     if runningSteal and savedPadCFrame then
         local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
-        if hrp then
-            task.wait(0.1)
-            hrp.CFrame = savedPadCFrame
-        end
+        if hrp then task.wait(0.1) hrp.CFrame = savedPadCFrame end
     end
 end)
 
--- === MENGISI KONTEN UI ===
+-- === KONTEN MENU ===
 CreateSection("Main Farm")
 CreateToggle("Auto Tap x2", function(state) runningTap = state end)
 CreateToggle("Auto Steal Pet", function(state)
     runningSteal = state
     if runningSteal then
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            savedPadCFrame = hrp.CFrame
-        end
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then savedPadCFrame = hrp.CFrame end
         totalStealCount = 0
         StealIndicator.Text = "STEALING ACTIVE (0)"
-        StealIndicator.Visible = true 
+        StealIndicator.Visible = true
         StartPositionLock()
-        ShowResultNotif("Auto Steal Aktif", "Posisi pad dikunci & siap melempar.", Color3.fromRGB(255, 50, 100))
+        ShowTieredNotif({
+            compact = true,
+            title = "Auto Steal Aktif",
+            detail = "Posisi pad dikunci & siap melempar.",
+            customColor = Color3.fromRGB(255, 50, 100)
+        })
     else
-        StealIndicator.Visible = false 
-        if cframeLockConnection then
-            cframeLockConnection:Disconnect()
-            cframeLockConnection = nil
-        end
+        StealIndicator.Visible = false
+        if cframeLockConnection then cframeLockConnection:Disconnect() cframeLockConnection = nil end
     end
 end)
 
@@ -535,9 +629,7 @@ CreateToggle("Auto Upgrade Stand", function(state) runningUpgrade = state end)
 
 Content.CanvasSize = UDim2.new(0, 0, 0, Layout.AbsoluteContentSize.Y + 20)
 
--- === LOOP LOGIC SKRIP ===
-
--- Loop 1: Auto Tap x2
+-- === LOOP LOGIKA ===
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -545,20 +637,14 @@ task.spawn(function()
             pcall(function()
                 for _, gui in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
                     if (gui:IsA("ImageButton") or gui:IsA("TextButton")) and gui.Visible then
-                        local isTarget = false
                         local name = gui.Name:lower()
-                        if name:find("tapbonus") or name:find("training_tap") or name:find("x2") or name:find("2x") then
-                            if gui.AbsoluteSize.X > 20 and gui.AbsoluteSize.X < 150 and gui.AbsoluteSize.Y > 20 and gui.AbsoluteSize.Y < 150 then
-                                isTarget = true
+                        if (name:find("tapbonus") or name:find("training_tap") or name:find("x2") or name:find("2x"))
+                            and gui.AbsoluteSize.X > 20 and gui.AbsoluteSize.X < 150
+                            and gui.AbsoluteSize.Y > 20 and gui.AbsoluteSize.Y < 150 then
+                            if firesignal then
+                                firesignal(gui.Activated)
+                                firesignal(gui.MouseButton1Click)
                             end
-                        end
-                        if isTarget then
-                            pcall(function()
-                                if firesignal then
-                                    firesignal(gui.Activated)
-                                    firesignal(gui.MouseButton1Click)
-                                end
-                            end)
                             break
                         end
                     end
@@ -568,7 +654,6 @@ task.spawn(function()
     end
 end)
 
--- Loop 2: Smart Sequential Auto Steal + Single Verified Notification
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not Remotes then return end
@@ -576,20 +661,13 @@ task.spawn(function()
     local ThrowMeter = Remotes:WaitForChild("Throw_MeterStarted", 10)
     local ThrowResolve = Remotes:WaitForChild("Throw_Resolve", 10)
     local ThrowComplete = Remotes:WaitForChild("Throw_Complete", 10)
-
     local lastCycleTick = tick()
 
     while true do
         if runningSteal then
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
+            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
-                if not savedPadCFrame then
-                    savedPadCFrame = hrp.CFrame
-                end
-
-                -- Watchdog pemulihan otomatis jika siklus macet > 3.5 detik
+                if not savedPadCFrame then savedPadCFrame = hrp.CFrame end
                 if (tick() - lastCycleTick) > 3.5 then
                     pcall(function() ThrowComplete:InvokeServer() end)
                     hrp.CFrame = savedPadCFrame
@@ -597,53 +675,46 @@ task.spawn(function()
                     task.wait(0.2)
                 end
 
-                -- Reset flag notifikasi & simpan daftar item sebelum melempar
                 catchNotifiedThisCycle = false
                 local beforeTools = SnapshotOwnedTools()
 
                 local ok = pcall(function()
-                    local startRes = ThrowStart:InvokeServer()
-                    if startRes == false then
+                    if ThrowStart:InvokeServer() == false then
                         ThrowComplete:InvokeServer()
                         task.wait(0.15)
-                        startRes = ThrowStart:InvokeServer()
+                        ThrowStart:InvokeServer()
                     end
-
                     task.wait(0.08)
                     if not runningSteal then return end
                     ThrowMeter:FireServer()
-
                     task.wait(0.08)
                     if not runningSteal then return end
                     local resolveRes = ThrowResolve:InvokeServer(1)
-
                     task.wait(0.08)
                     if not runningSteal then return end
                     local completeRes = ThrowComplete:InvokeServer()
 
                     lastCycleTick = tick()
-
-                    -- Tunggu singkat agar replikasi Backpack / GUI selesai
                     task.wait(0.12)
 
-                    -- Hanya tampilkan 1x notifikasi jika benar-benar ada pet yang tertangkap
-                    local notifTitle, notifDetail = ParseThrowResult(resolveRes, completeRes)
-                    if notifTitle then
-                        RegisterVerifiedCatch(notifTitle, notifDetail)
+                    local parsed = ParseThrowResult(resolveRes, completeRes)
+                    if parsed then
+                        RegisterVerifiedCatch(parsed)
                     else
                         local newTool = FindNewlyAddedTool(beforeTools)
                         if newTool then
                             local petName = newTool:GetAttribute("DisplayName") or newTool:GetAttribute("AnimalName") or newTool.Name
-                            local mutation = tostring(newTool:GetAttribute("Mutation") or "None")
+                            local mTxt, sTxt, rTxt = DetectTraitsFromString(petName)
                             local weight = newTool:GetAttribute("Weight")
                             local cps = newTool:GetAttribute("CPS") or newTool:GetAttribute("CashPerSecond")
-                            local detail = string.format(
-                                "Mutation: %s | Weight: %s | CPS: %s",
-                                mutation,
-                                weight and (tostring(weight) .. " kg") or "-",
-                                cps and ("$" .. FormatShortNumber(cps) .. "/s") or "-"
-                            )
-                            RegisterVerifiedCatch(tostring(petName) .. " Obtained!", detail)
+                            RegisterVerifiedCatch({
+                                title = tostring(petName) .. " Obtained!",
+                                mutation = newTool:GetAttribute("Mutation") or newTool:GetAttribute("Variant") or mTxt or "Normal",
+                                size = newTool:GetAttribute("Size") or newTool:GetAttribute("Scale") or sTxt or "Normal",
+                                rarity = newTool:GetAttribute("Rarity") or newTool:GetAttribute("Tier") or rTxt or "Common",
+                                weight = weight and (tostring(weight) .. " kg") or "-",
+                                cps = cps and ("$" .. FormatShortNumber(cps) .. "/s") or "-"
+                            })
                         end
                     end
                 end)
@@ -664,26 +735,22 @@ task.spawn(function()
     end
 end)
 
--- Loop 3: Auto Equip Best (15 Detik)
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    if not Remotes then return end
-    local PlotEquipBest = Remotes:WaitForChild("Plot_EquipBest", 5)
+    local PlotEquipBest = Remotes and Remotes:WaitForChild("Plot_EquipBest", 5)
     while true do
         if runningEquip and PlotEquipBest then
             pcall(function() PlotEquipBest:InvokeServer() end)
-            task.wait(15) 
+            task.wait(15)
         else
             task.wait(1)
         end
     end
 end)
 
--- Loop 4: Auto Buy Best Food
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    if not Remotes then return end
-    local ShopBuy = Remotes:WaitForChild("Shop_Buy", 5)
+    local ShopBuy = Remotes and Remotes:WaitForChild("Shop_Buy", 5)
     while true do
         if runningFood and ShopBuy then
             for i = 60, 1, -1 do
@@ -698,15 +765,13 @@ task.spawn(function()
     end
 end)
 
--- Loop 5: Auto Upgrade Stand
 task.spawn(function()
     local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    if not Remotes then return end
-    local StandUpgrade = Remotes:WaitForChild("Stand_Upgrade", 5)
+    local StandUpgrade = Remotes and Remotes:WaitForChild("Stand_Upgrade", 5)
     while true do
         if runningUpgrade and StandUpgrade then
             pcall(function() StandUpgrade:InvokeServer() end)
-            task.wait(3) 
+            task.wait(3)
         else
             task.wait(1)
         end
