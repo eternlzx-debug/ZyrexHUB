@@ -1,4 +1,4 @@
--- Skrip Auto Farm Ultimate v35 (Auto Game Title + Tiered Notif) by ZyrexScript
+-- Skrip Auto Farm Ultimate v36 (Deep CPS Detection + Fast Parallel Auto Buy) by ZyrexScript
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -20,6 +20,7 @@ local gameName = (okGame and gameInfo and gameInfo.Name) or "Throw Food for Anim
 local runningTap, runningSteal, runningEquip, runningUpgrade, runningFood = false, false, false, false, false
 local savedPadCFrame, cframeLockConnection, charAddedConnection, guiAddedConnection = nil, nil, nil, nil
 local totalStealCount, catchNotifiedThisCycle, lastCatchTick, lastPlotFullTick = 0, false, 0, 0
+local lastCatchNotifRef = nil
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "ZyrexHub"
@@ -66,6 +67,12 @@ local RARITY_TIERS = {
 }
 
 local function FormatShortNumber(num)
+    if type(num) == "string" then
+        local cleaned = num:gsub("[%$,/sScCpP%s]", "")
+        local parsed = tonumber(cleaned)
+        if not parsed then return num end
+        num = parsed
+    end
     if type(num) ~= "number" then return tostring(num) end
     local suffixes = {"", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc", "Udc", "Ddc", "Tdc", "Ocd"}
     local idx = 1
@@ -74,6 +81,31 @@ local function FormatShortNumber(num)
         idx = idx + 1
     end
     return idx == 1 and tostring(math.floor(num)) or (string.format("%.2f%s", num, suffixes[idx]):gsub("%.00", ""))
+end
+
+local function FormatCpsDisplay(rawCps)
+    if not rawCps or rawCps == "" or rawCps == "-" then return "-" end
+    local str = tostring(rawCps):gsub("^%s+", ""):gsub("%s+$", "")
+    if type(rawCps) == "number" then
+        return "$" .. FormatShortNumber(rawCps) .. "/s"
+    end
+    if str:find("%$") or str:lower():find("/s") then
+        return str
+    end
+    local num = tonumber(str)
+    if num then
+        return "$" .. FormatShortNumber(num) .. "/s"
+    end
+    return "$" .. str .. "/s"
+end
+
+local function FormatWeightDisplay(rawWeight)
+    if not rawWeight or rawWeight == "" or rawWeight == "-" then return "-" end
+    local str = tostring(rawWeight):gsub("^%s+", ""):gsub("%s+$", "")
+    if str:lower():find("kg") or str:lower():find("t") then
+        return str
+    end
+    return str .. " kg"
 end
 
 local function MatchTier(tbl, rawVal, fallbackKey)
@@ -175,6 +207,7 @@ local function ShowTieredNotif(opts)
     end
     TitleLbl.Parent = Card
 
+    local statLabelRef = nil
     if opts.compact then
         local SubLbl = Instance.new("TextLabel")
         SubLbl.Size = UDim2.new(1, -26, 0, 18)
@@ -215,6 +248,7 @@ local function ShowTieredNotif(opts)
         StatLbl.TextTruncate = Enum.TextTruncate.AtEnd
         StatLbl.Text = string.format("Weight: %s  •  CPS: %s", opts.weight or "-", opts.cps or "-")
         StatLbl.Parent = Card
+        statLabelRef = StatLbl
     end
 
     local CloseNotif = Instance.new("TextButton")
@@ -258,6 +292,13 @@ local function ShowTieredNotif(opts)
         Position = UDim2.new(0, 0, 0, 0)
     }):Play()
     task.delay(4, Dismiss)
+
+    return {
+        statLbl = statLabelRef,
+        weight = opts.weight or "-",
+        cps = opts.cps or "-",
+        createdAt = tick()
+    }
 end
 
 -- === INDIKATOR STATUS BAWAH ===
@@ -275,12 +316,108 @@ StealIndicator.Parent = ScreenGui
 Instance.new("UICorner", StealIndicator).CornerRadius = UDim.new(1, 0)
 
 local function RegisterVerifiedCatch(catchData)
-    if catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.7 then return end
+    -- Jika notifikasi baru saja muncul (< 0.75s) dan UI game baru mengirim CPS/Weight lengkap, perbarui kartu yang sama
+    if (catchNotifiedThisCycle or (tick() - lastCatchTick) < 0.75) then
+        if lastCatchNotifRef and lastCatchNotifRef.statLbl and lastCatchNotifRef.statLbl.Parent then
+            local newW = (catchData.weight and catchData.weight ~= "-") and catchData.weight or lastCatchNotifRef.weight
+            local newC = (catchData.cps and catchData.cps ~= "-") and catchData.cps or lastCatchNotifRef.cps
+            lastCatchNotifRef.weight = newW
+            lastCatchNotifRef.cps = newC
+            lastCatchNotifRef.statLbl.Text = string.format("Weight: %s  •  CPS: %s", newW, newC)
+        end
+        return
+    end
     catchNotifiedThisCycle = true
     lastCatchTick = tick()
     totalStealCount += 1
     StealIndicator.Text = "STEALING ACTIVE (" .. totalStealCount .. ")"
-    ShowTieredNotif(catchData)
+    lastCatchNotifRef = ShowTieredNotif(catchData)
+end
+
+-- === EKSTRAKTOR STATISTIK DARI TABLE / TOOL / UI ===
+local function ExtractStatsFromTable(tbl)
+    local foundCps, foundWeight, foundMut, foundSize, foundRar = nil, nil, nil, nil, nil
+    for k, v in pairs(tbl) do
+        local kl = tostring(k):lower()
+        if not foundCps and (kl:find("cps") or kl:find("cashper") or kl:find("coinper") or kl:find("moneyper") or kl:find("income") or kl:find("rate") or kl:find("earn")) then
+            foundCps = FormatCpsDisplay(v)
+        elseif not foundWeight and (kl:find("weight") or kl:find("mass")) then
+            foundWeight = FormatWeightDisplay(v)
+        elseif not foundMut and (kl:find("mut") or kl:find("variant")) then
+            foundMut = tostring(v)
+        elseif not foundSize and (kl:find("size") or kl:find("scale")) then
+            foundSize = tostring(v)
+        elseif not foundRar and (kl:find("rar") or kl:find("tier")) then
+            foundRar = tostring(v)
+        end
+    end
+    return foundCps, foundWeight, foundMut, foundSize, foundRar
+end
+
+local function ExtractToolStats(tool)
+    local petName = tool:GetAttribute("DisplayName") or tool:GetAttribute("AnimalName") or tool:GetAttribute("PetName") or tool.Name
+    local mTxt, sTxt, rTxt = DetectTraitsFromString(petName)
+    local cpsVal, weightVal = nil, nil
+
+    local function InspectObject(obj)
+        local c, w, m, s, r = ExtractStatsFromTable(obj:GetAttributes())
+        cpsVal = cpsVal or c
+        weightVal = weightVal or w
+        mTxt = mTxt or m
+        sTxt = sTxt or s
+        rTxt = rTxt or r
+    end
+
+    InspectObject(tool)
+    for _, desc in ipairs(tool:GetDescendants()) do
+        InspectObject(desc)
+        if desc:IsA("ValueBase") then
+            local vn = desc.Name:lower()
+            local vv = desc.Value
+            if not cpsVal and (vn:find("cps") or vn:find("cash") or vn:find("coin") or vn:find("money") or vn:find("income") or vn:find("rate") or vn:find("earn")) then
+                cpsVal = FormatCpsDisplay(vv)
+            elseif not weightVal and (vn:find("weight") or vn:find("mass")) then
+                weightVal = FormatWeightDisplay(vv)
+            elseif not mTxt and (vn:find("mut") or vn:find("variant")) then
+                mTxt = tostring(vv)
+            elseif not sTxt and (vn:find("size") or vn:find("scale")) then
+                sTxt = tostring(vv)
+            elseif not rTxt and (vn:find("rar") or vn:find("tier")) then
+                rTxt = tostring(vv)
+            end
+        elseif desc:IsA("TextLabel") and desc.Text ~= "" then
+            local lt = desc.Text
+            if not cpsVal then
+                local mCps = lt:match("(%$[%d%.]+%s*%a*%s*/%s*[sS])") or lt:match("[Cc][Pp][Ss]%s*:%s*([^|\n]+)") or lt:match("([%d%.]+%s*%a*%s*[Cc][Pp][Ss])")
+                if mCps then cpsVal = FormatCpsDisplay(mCps) end
+            end
+            if not weightVal then
+                local mW = lt:match("[Ww]eight%s*:%s*([^|\n]+)") or lt:match("([%d%.]+%s*%a*%s*[kK][gG])")
+                if mW then weightVal = FormatWeightDisplay(mW) end
+            end
+        end
+    end
+
+    if (not cpsVal or not weightVal) and tool.ToolTip ~= "" then
+        local tt = tool.ToolTip
+        if not cpsVal then
+            local mCps = tt:match("(%$[%d%.]+%s*%a*%s*/%s*[sS])") or tt:match("[Cc][Pp][Ss]%s*:%s*([^|\n]+)")
+            if mCps then cpsVal = FormatCpsDisplay(mCps) end
+        end
+        if not weightVal then
+            local mW = tt:match("[Ww]eight%s*:%s*([^|\n]+)") or tt:match("([%d%.]+%s*%a*%s*[kK][gG])")
+            if mW then weightVal = FormatWeightDisplay(mW) end
+        end
+    end
+
+    return {
+        title = tostring(petName) .. " Obtained!",
+        mutation = mTxt or "Normal",
+        size = sTxt or "Normal",
+        rarity = rTxt or "Common",
+        weight = weightVal or "-",
+        cps = cpsVal or "-"
+    }
 end
 
 local function ParseThrowResult(res1, res2)
@@ -291,15 +428,14 @@ local function ParseThrowResult(res1, res2)
             local name = pet.Name or pet.AnimalName or pet.PetName or pet.Id or pet.ID
             if name then
                 local mTxt, sTxt, rTxt = DetectTraitsFromString(name)
-                local rawWeight = pet.Weight or pet.Mass
-                local rawCps = pet.CPS or pet.CashPerSecond or pet.Income or pet.Rate
+                local c, w, m, s, r = ExtractStatsFromTable(pet)
                 return {
                     title = tostring(name) .. " Obtained!",
-                    mutation = pet.Mutation or pet.Variant or mTxt or "Normal",
-                    size = pet.Size or pet.Scale or sTxt or "Normal",
-                    rarity = pet.Rarity or pet.Tier or rTxt or "Common",
-                    weight = rawWeight and (tostring(rawWeight) .. ((tostring(rawWeight):find("kg") or tostring(rawWeight):find("t")) and "" or " kg")) or "-",
-                    cps = rawCps and ("$" .. FormatShortNumber(rawCps) .. "/s") or "-"
+                    mutation = m or mTxt or "Normal",
+                    size = s or sTxt or "Normal",
+                    rarity = r or rTxt or "Common",
+                    weight = w or "-",
+                    cps = c or "-"
                 }
             end
         end
@@ -309,7 +445,6 @@ local function ParseThrowResult(res1, res2)
         return {
             title = rawName .. " Obtained!",
             mutation = mTxt or "Normal",
-            size = sTxt or "Normal",
             rarity = rTxt or "Common",
             weight = "-",
             cps = "-"
@@ -318,11 +453,11 @@ local function ParseThrowResult(res1, res2)
     return nil
 end
 
--- === LISTENER NOTIFIKASI BAWAAN GAME ===
+-- === LISTENER NOTIFIKASI BAWAAN GAME (DEEP CONTAINER SCAN) ===
 guiAddedConnection = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc)
     if not runningSteal or not desc:IsA("TextLabel") then return end
     task.defer(function()
-        task.wait(0.05)
+        task.wait(0.14)
         if not desc or not desc.Parent then return end
         local txt = desc.Text
         if type(txt) ~= "string" or txt == "" then return end
@@ -330,19 +465,49 @@ guiAddedConnection = LocalPlayer.PlayerGui.DescendantAdded:Connect(function(desc
         if txt:find("Obtained!") then
             local mTxt, sTxt, rTxt = DetectTraitsFromString(txt)
             local weightStr, cpsStr = "-", "-"
-            for _, sib in ipairs(desc.Parent:GetChildren()) do
-                if sib:IsA("TextLabel") and sib ~= desc then
-                    local st = sib.Text
-                    local sm, ss, sr = DetectTraitsFromString(st)
-                    mTxt = mTxt or sm
-                    sTxt = sTxt or ss
-                    rTxt = rTxt or sr
-                    local wMatch = st:match("Weight:%s*([^|]+)")
-                    local cMatch = st:match("CPS:%s*([^|]+)")
-                    if wMatch then weightStr = wMatch:gsub("%s+$", "") end
-                    if cMatch then cpsStr = cMatch:gsub("%s+$", "") end
+
+            -- Naik ke container kartu notifikasi agar seluruh TextLabel anak ikut terpindai
+            local scanRoot = desc.Parent
+            if scanRoot and scanRoot.Parent and not scanRoot.Parent:IsA("ScreenGui") and not scanRoot.Parent:IsA("PlayerGui") then
+                if #scanRoot:GetDescendants() <= 4 then
+                    scanRoot = scanRoot.Parent
                 end
             end
+
+            if scanRoot then
+                for _, sib in ipairs(scanRoot:GetDescendants()) do
+                    if sib:IsA("TextLabel") and sib.Text ~= "" then
+                        local st = sib.Text
+                        local sm, ss, sr = DetectTraitsFromString(st)
+                        mTxt = mTxt or sm
+                        sTxt = sTxt or ss
+                        rTxt = rTxt or sr
+
+                        local explicitMut = st:match("[Mm]utation%s*:%s*([^|\n]+)")
+                        local explicitSize = st:match("[Ss]ize%s*:%s*([^|\n]+)")
+                        local explicitRar = st:match("[Rr]arity%s*:%s*([^|\n]+)")
+                        if explicitMut then mTxt = explicitMut:gsub("%s+$", "") end
+                        if explicitSize then sTxt = explicitSize:gsub("%s+$", "") end
+                        if explicitRar then rTxt = explicitRar:gsub("%s+$", "") end
+
+                        if weightStr == "-" then
+                            local wMatch = st:match("[Ww]eight%s*:%s*([^|\n]+)") or st:match("([%d%.]+%s*%a*%s*[kK][gG])")
+                            if wMatch then weightStr = FormatWeightDisplay(wMatch) end
+                        end
+
+                        if cpsStr == "-" then
+                            local cMatch = st:match("[Cc][Pp][Ss]%s*:%s*([^|\n]+)")
+                                or st:match("[Cc]ash/[sS]%s*:%s*([^|\n]+)")
+                                or st:match("[Ii]ncome%s*:%s*([^|\n]+)")
+                                or st:match("(%$[%d%.]+%s*%a*%s*/%s*[sS])")
+                                or st:match("([%d%.]+%s*%a*%s*/%s*[sS][eE][cC]?)")
+                                or st:match("([%d%.]+%s*%a*%s*[Cc][Pp][Ss])")
+                            if cMatch then cpsStr = FormatCpsDisplay(cMatch) end
+                        end
+                    end
+                end
+            end
+
             RegisterVerifiedCatch({
                 title = txt,
                 mutation = mTxt or "Normal",
@@ -606,6 +771,50 @@ charAddedConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
     end
 end)
 
+-- === FUNGSI TRIGGER CEPAT BUY FOOD & UPGRADE STAND ===
+local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
+local ShopBuyRemote = RemotesFolder and RemotesFolder:WaitForChild("Shop_Buy", 10)
+local StandUpgradeRemote = RemotesFolder and RemotesFolder:WaitForChild("Stand_Upgrade", 10)
+local bestBoughtFoodIdx = nil
+
+local function TriggerFoodBuyBurst()
+    if not runningFood or not ShopBuyRemote then return end
+    -- Jika sudah diketahui food terbaik yang terbuka, beli langsung untuk respon kilat
+    if bestBoughtFoodIdx then
+        task.spawn(function()
+            pcall(function() ShopBuyRemote:InvokeServer(bestBoughtFoodIdx) end)
+        end)
+    end
+    -- Sapu dari tier tertinggi (60 -> 1) dalam batch paralel ringan agar tidak membebani Auto Steal
+    task.spawn(function()
+        for batchStart = 60, 1, -10 do
+            if not runningFood then break end
+            for i = batchStart, math.max(1, batchStart - 9), -1 do
+                task.spawn(function()
+                    local ok, res = pcall(function()
+                        return ShopBuyRemote:InvokeServer(i)
+                    end)
+                    if ok and res and res ~= false then
+                        if not bestBoughtFoodIdx or i > bestBoughtFoodIdx then
+                            bestBoughtFoodIdx = i
+                        end
+                    end
+                end)
+            end
+            task.wait(0.03)
+        end
+    end)
+end
+
+local function TriggerStandUpgradePulse()
+    if not runningUpgrade or not StandUpgradeRemote then return end
+    task.spawn(function()
+        pcall(function()
+            StandUpgradeRemote:InvokeServer()
+        end)
+    end)
+end
+
 -- === KONTEN MENU ===
 CreateSection("Main Farm")
 CreateToggle("Auto Tap x2", function(state) runningTap = state end)
@@ -632,12 +841,19 @@ end)
 
 CreateSection("Automation & Upgrades")
 CreateToggle("Auto Equip Best (15s)", function(state) runningEquip = state end)
-CreateToggle("Auto Buy Best Food", function(state) runningFood = state end)
-CreateToggle("Auto Upgrade Stand", function(state) runningUpgrade = state end)
+CreateToggle("Auto Buy Best Food", function(state)
+    runningFood = state
+    if state then TriggerFoodBuyBurst() end
+end)
+CreateToggle("Auto Upgrade Stand", function(state)
+    runningUpgrade = state
+    if state then TriggerStandUpgradePulse() end
+end)
 
 Content.CanvasSize = UDim2.new(0, 0, 0, Layout.AbsoluteContentSize.Y + 20)
 
 -- === LOOP LOGIKA ===
+-- Loop 1: Auto Tap x2
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -662,8 +878,9 @@ task.spawn(function()
     end
 end)
 
+-- Loop 2: Auto Steal Pet (Paralel dengan Auto Buy & Auto Upgrade)
 task.spawn(function()
-    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+    local Remotes = RemotesFolder or ReplicatedStorage:WaitForChild("Remotes", 10)
     if not Remotes then return end
     local ThrowStart = Remotes:WaitForChild("Throw_Start", 10)
     local ThrowMeter = Remotes:WaitForChild("Throw_MeterStarted", 10)
@@ -680,7 +897,7 @@ task.spawn(function()
                     pcall(function() ThrowComplete:InvokeServer() end)
                     hrp.CFrame = savedPadCFrame
                     lastCycleTick = tick()
-                    task.wait(0.2)
+                    task.wait(0.15)
                 end
 
                 catchNotifiedThisCycle = false
@@ -689,21 +906,21 @@ task.spawn(function()
                 local ok = pcall(function()
                     if ThrowStart:InvokeServer() == false then
                         ThrowComplete:InvokeServer()
-                        task.wait(0.15)
+                        task.wait(0.1)
                         ThrowStart:InvokeServer()
                     end
-                    task.wait(0.08)
+                    task.wait(0.07)
                     if not runningSteal then return end
                     ThrowMeter:FireServer()
-                    task.wait(0.08)
+                    task.wait(0.07)
                     if not runningSteal then return end
                     local resolveRes = ThrowResolve:InvokeServer(1)
-                    task.wait(0.08)
+                    task.wait(0.07)
                     if not runningSteal then return end
                     local completeRes = ThrowComplete:InvokeServer()
 
                     lastCycleTick = tick()
-                    task.wait(0.12)
+                    task.wait(0.18)
 
                     local parsed = ParseThrowResult(resolveRes, completeRes)
                     if parsed then
@@ -711,77 +928,61 @@ task.spawn(function()
                     else
                         local newTool = FindNewlyAddedTool(beforeTools)
                         if newTool then
-                            local petName = newTool:GetAttribute("DisplayName") or newTool:GetAttribute("AnimalName") or newTool.Name
-                            local mTxt, sTxt, rTxt = DetectTraitsFromString(petName)
-                            local weight = newTool:GetAttribute("Weight")
-                            local cps = newTool:GetAttribute("CPS") or newTool:GetAttribute("CashPerSecond")
-                            RegisterVerifiedCatch({
-                                title = tostring(petName) .. " Obtained!",
-                                mutation = newTool:GetAttribute("Mutation") or newTool:GetAttribute("Variant") or mTxt or "Normal",
-                                size = newTool:GetAttribute("Size") or newTool:GetAttribute("Scale") or sTxt or "Normal",
-                                rarity = newTool:GetAttribute("Rarity") or newTool:GetAttribute("Tier") or rTxt or "Common",
-                                weight = weight and (tostring(weight) .. " kg") or "-",
-                                cps = cps and ("$" .. FormatShortNumber(cps) .. "/s") or "-"
-                            })
+                            RegisterVerifiedCatch(ExtractToolStats(newTool))
                         end
                     end
                 end)
 
                 if not ok then
                     pcall(function() ThrowComplete:InvokeServer() end)
-                    task.wait(0.3)
-                else
                     task.wait(0.25)
+                else
+                    task.wait(0.2)
                 end
             else
-                task.wait(0.3)
+                task.wait(0.25)
             end
         else
             lastCycleTick = tick()
-            task.wait(0.25)
+            task.wait(0.2)
         end
     end
 end)
 
+-- Loop 3: Auto Equip Best (15s)
 task.spawn(function()
-    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    local Remotes = RemotesFolder or ReplicatedStorage:WaitForChild("Remotes", 5)
     local PlotEquipBest = Remotes and Remotes:WaitForChild("Plot_EquipBest", 5)
     while true do
         if runningEquip and PlotEquipBest then
-            pcall(function() PlotEquipBest:InvokeServer() end)
+            task.spawn(function() pcall(function() PlotEquipBest:InvokeServer() end) end)
             task.wait(15)
         else
-            task.wait(1)
+            task.wait(0.5)
         end
     end
 end)
 
+-- Loop 4: Fast Auto Buy Best Food (Respon Cepat + Non-Blocking)
 task.spawn(function()
-    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    local ShopBuy = Remotes and Remotes:WaitForChild("Shop_Buy", 5)
     while true do
-        if runningFood and ShopBuy then
-            for i = 60, 1, -1 do
-                if not runningFood then break end
-                task.spawn(function() pcall(function() ShopBuy:InvokeServer(i) end) end)
-                task.wait(0.05)
-            end
-            task.wait(5)
+        if runningFood then
+            TriggerFoodBuyBurst()
+            task.wait(0.45)
         else
-            task.wait(1)
+            task.wait(0.15)
         end
     end
 end)
 
+-- Loop 5: Fast Auto Upgrade Stand (Respon Cepat 0.3s + Non-Blocking)
 task.spawn(function()
-    local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    local StandUpgrade = Remotes and Remotes:WaitForChild("Stand_Upgrade", 5)
     while true do
-        if runningUpgrade and StandUpgrade then
-            pcall(function() StandUpgrade:InvokeServer() end)
-            task.wait(3)
+        if runningUpgrade then
+            TriggerStandUpgradePulse()
+            task.wait(0.3)
         else
-            task.wait(1)
+            task.wait(0.15)
         end
     end
 end)
